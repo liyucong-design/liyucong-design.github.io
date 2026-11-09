@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#c9d4e6">
+  <title>PORTFOLIO · 2026 UI作品集</title>
+  <meta name="description" content="复杂的事简单化，简单的事标准化，标准的事流程化，流程的事自动化。2026 UI作品集。">
+  <link rel="stylesheet" href="style.css">
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <main class="stage">
+    <!-- 底层：视频画面；中间：标题；上层：抠出的老虎，让老虎挡在标题前面 -->
+    <canvas id="film" role="img" aria-label="金饰白虎从雪原远处踏着祥云走来，停下凝视镜头，随后闭眼转身，镜头升高俯拍，它踩着祥云足迹向右走出画面"></canvas>
+
+    <section class="hero" aria-labelledby="heroTitle">
+      <h1 id="heroTitle" class="title" aria-label="PORTFOLIO"><span class="l" aria-hidden="true">PORT</span><span class="r" aria-hidden="true">FOLIO</span></h1>
+    </section>
+
+    <canvas id="front" aria-hidden="true"></canvas>
+
+    <section class="intro" aria-label="2026 UI作品集">
+      <p class="sub"><span>2026</span> UI作品集</p>
+      <div class="motto" aria-label="复杂的事简单化，简单的事标准化，标准的事流程化，流程的事自动化">
+        <p><span>复杂的事</span><b>简单化</b><span>简单的事</span><b>标准化</b></p>
+        <p><span>标准的事</span><b>流程化</b><span>流程的事</span><b>自动化</b></p>
+      </div>
+    </section>
+
+    <button class="explore" aria-label="继续往下看"><span>EXPLORE</span><i aria-hidden="true"></i></button>
+
+    <section class="contents" aria-labelledby="contentsTitle">
+      <div class="contents-head">
+        <p class="label"><span>SELECTED WORKS</span><span>2026</span></p>
+        <h2 id="contentsTitle">CONTENTS</h2>
+        <div class="rule"><span>以设计，回应每一种可能。</span><span>UI / UX DESIGN</span></div>
+      </div>
+      <ol class="cards">
+        <li><a href="#/works/e-service" data-work class="card"><span class="top"><span>MINI PROGRAM</span><i aria-hidden="true">↗</i></span><em>01</em><strong>E服务小程序</strong><span class="bottom"><span>E SERVICE</span><span>9 页</span></span></a></li>
+        <li><a href="#/works/tai-life" data-work class="card"><span class="top"><span>MOBILE APP</span><i aria-hidden="true">↗</i></span><em>02</em><strong>泰生活 APP</strong><span class="bottom"><span>TAI LIFE</span><span>6 页</span></span></a></li>
+        <li><a href="#/works/cai-ling-tong" data-work class="card"><span class="top"><span>PRODUCT DESIGN</span><i aria-hidden="true">↗</i></span><em>03</em><strong>采灵通</strong><span class="bottom"><span>CAI LING TONG</span><span>9 页</span></span></a></li>
+        <li><a href="#/works/other-works" data-work class="card"><span class="top"><span>VISUAL EXPLORATION</span><i aria-hidden="true">↗</i></span><em>04</em><strong>其他作品</strong><span class="bottom"><span>OTHER WORKS</span><span>6 页</span></span></a></li>
+      </ol>
+    </section>
+
+<section class="end" aria-labelledby="endTitle">
+      <div class="end-head">
+        <p class="label"><span>THANKS FOR WATCHING</span><span>2026</span></p>
+        <h2 id="endTitle">THANK YOU</h2>
+        <div class="rule"><span>感谢观看，期待与你一起做出好产品。</span><span>UI / UX DESIGN</span></div>
+      </div>
+      <div class="end-main">
+        <a class="dl" href="portfolio/portfolio-2026.pdf" aria-label="下载完整作品集 PDF"><span class="dl-btn"><span>DOWNLOAD</span><i aria-hidden="true"></i></span></a>
+        <p class="dl-info">完整作品集 PDF · 32 页 · <span id="dlSize">14 MB</span><span class="dl-state" aria-live="polite"></span></p>
+        <div class="end-contact" id="endContact" hidden></div>
+        <button class="again" id="dlAgain">再看一遍 <span aria-hidden="true">↑</span></button>
+      </div>
+    </section>
+
+
+    <footer class="footer" aria-hidden="true">
+      <span class="scene"><b id="sceneNo">01</b><i></i><span id="sceneName">PORTFOLIO</span></span>
+      <span class="bar"><i id="bar"></i></span>
+      <span class="hint" id="hint"></span>
+    </footer>
+  </main>
+
+    <header class="header">
+      <button class="brand" data-go="0" aria-label="回到首页"><svg viewBox="0 0 36 36" aria-hidden="true"><path d="M8 14C2 4 11 3 14 9c3-1 5-1 8 0 3-6 12-5 6 5 3 4 3 11-1 15-5 5-13 5-18 0-4-4-4-11-1-15Z"/><path d="m11 18 4 2m10-2-4 2m-6 6 3 2 3-2M18 9v5"/></svg><span>PORTFOLIO<small>UI / UX · 2026</small></span></button>
+      <nav class="nav" aria-label="场景">
+        <button data-go="0" data-nav="0">首页<span>01</span></button>
+        <button data-go="2" data-nav="2">目录<span>02</span></button>
+        <button data-go="3" data-nav="3">下载<span>03</span></button>
+      </nav>
+    </header>
+
+  <div class="reader" id="reader" role="dialog" aria-labelledby="rTitle" tabindex="-1" hidden>
+    <header class="r-bar" id="rBar">
+      <p class="r-title"><b id="rNo">01</b><span id="rTitle"></span></p>
+      <p class="r-count" aria-live="off"><span id="rAt">1</span> / <span id="rOf">1</span></p>
+    </header>
+    <div class="r-stage" id="rStage">
+      <div class="r-pages" id="rPages"><div class="r-end" id="rEnd"></div></div>
+    </div>
+    <div class="r-foot">
+      <div class="r-nav">
+        <button class="r-step" id="rPrev" aria-label="上一页"><i aria-hidden="true">↑</i></button>
+        <div class="r-rail" id="rRail" role="group" aria-label="跳到某一页"></div>
+        <button class="r-step" id="rNext" aria-label="下一页"><i aria-hidden="true">↓</i></button>
+      </div>
+      <p class="r-tip">滑动翻页，点页面放大</p>
+    </div>
+  </div>
+
+  <div class="zoomer" id="zoomer" role="dialog" aria-modal="true" aria-label="放大查看" hidden>
+    <button class="z-close" id="zClose" aria-label="关闭大图">×</button>
+    <div class="z-scroll" id="zScroll"><img id="zImg" alt=""></div>
+    <p class="z-hint">左右滑动查看</p>
+  </div>
+
+  <div class="loader" id="loader" aria-hidden="true"><span>PORTFOLIO</span><p>2026 UI作品集</p><b><i id="loaderBar"></i></b></div>
+</body>
+</html>
