@@ -7,28 +7,31 @@
   const SRC_W = 1440, SRC_H = 810;
   // 老虎抠像（系统主体识别）只做标题可见的前段：masks/NNN.webp 上下两格依次是第 2N、2N+1 帧，透明度即老虎。
   const MASK_LAST = 192, MASK_W = 960, MASK_H = 540;
-  // 开场：页面打开后，老虎从远处踏云走近几步（0 → INTRO_T 秒），停下就是首页
-  const INTRO_T = 2.2, INTRO_SECS = 2.6, INTRO_DELAY = 500;
+  // 开场：页面打开后，老虎从远处踏云走到近景（0 → INTRO_T 秒），近景就是首页的默认位置
+  const INTRO_T = 6.4, INTRO_DELAY = 500;
   // 吸附点（视频秒数）。hold：停在这里时定格，镜头极慢地推向这一点（比例坐标），zoom 为推近幅度
   const STAGES = [
-    { t: INTRO_T, hold: [0.5, 0.42], zoom: 0.025 },  // 01 首页：走近几步的白虎、标题、理念
-    { t: 6.4, hold: [0.5, 0.36], zoom: 0.045 },      // 02 凝视镜头，标题分开，出现 EXPLORE
-    { t: 15.0 },                               // 03 俯拍雪地，老虎已走出，目录
-    { t: 15.0, hold: [0.5, 0.52], zoom: 0.035 }, // 04 结尾：同一片雪地缓慢推近，目录换成 THANK YOU 和下载
+    { t: INTRO_T, hold: [0.5, 0.36], zoom: 0.045 },  // 01 首页：近景凝视镜头，标题分开，EXPLORE 引导
+    { t: 15.0 },                               // 02 俯拍雪地，老虎已走出，目录
+    { t: 15.0, hold: [0.5, 0.52], zoom: 0.035 }, // 03 结尾：同一片雪地缓慢推近，目录换成 THANK YOU 和下载
   ];
-  const CONTENTS_STAGE = 2, END_STAGE = 3;
+  const CONTENTS_STAGE = 1, END_STAGE = 2;
   const END_W = 0.9;                       // 目录到结尾的切换时长（秒），这段画面不动，只换文字
   // 姓名和联系方式：填上就会显示在结尾页，点击可复制；留空则不显示
   const CONTACT = { name: '', email: '', wechat: '' };
-  // 播放速度（相对原速）：走出画面这段放慢到 0.57 倍（0.62 偏快、约 0.52 偏慢）
-  const rate = t => lerp(1.1, 0.57, smoothstep(9.8, 10.8, t));
+  // 播放速度（相对原速）。点击后为了让目录早点出来：凝视段几乎不动，2 倍速带过；闭眼转身段 1.5 倍，
+  // 到镜头快速拉高之前回落到 1.1 倍（那一下本来就快，不能再加）；走出画面段 0.9 倍（放慢过头用户嫌拖，原速又嫌快）
+  const rate = t => lerp(1.1, 0.9, smoothstep(9.8, 10.8, t)) * (1 + smoothstep(6.4, 6.7, t) * lerp(1, 0.36, smoothstep(7.2, 7.6, t)) * (1 - smoothstep(8.6, 9.5, t)));
   // 放慢段补了中间帧（光流插帧）：第 i 帧和 i+1 帧之间多一张。每 4 张竖着拼成 frames/midNN.webp（文件数有上限）。
   // 播放位置用"半帧"计：槽位 2i 是原帧，2i+1 是中间帧（只在 MID_FROM 之后有）
   const MID_FROM = 236, MID_PER = 4, LAST_SLOT = LAST_FRAME * 2;
   const hasSlot = s => s >= 0 && s <= LAST_SLOT && ((s & 1) === 0 || ((s >> 1) >= MID_FROM && (s >> 1) < LAST_FRAME));
   const HOLD_SECS = 7;                     // 定格推近的时长
   const FAST_MS = 1000;                    // 快进时剩下的动作最多播多久
-  const CARDS_T = 11.8;                    // 播到这里，四张目录卡片几乎同时升起（按时间动画，不跟视频进度）
+  // 四张卡片紧跟在老虎身后连着出现（实际间隔约 0.4 秒）。老虎从左往右走出去，四个位置约在 12.1 / 12.6 / 13.0 / 13.4 秒让开，
+  // 再早会压在老虎脚上
+  const CARD_T = [12.35, 12.7, 13.05, 13.4];
+  const CARD_GAP = 130;                    // 快进或从结尾页回来时几张会同时到点：按这个间隔（毫秒）排队，不一起蹦出来
   const READY_FRAME = 160;                 // 走近到凝视的帧加载完就进入页面，其余在后台继续
 
   const film = document.getElementById('film'), fctx = film.getContext('2d');
@@ -36,7 +39,23 @@
   const root = document.documentElement;
   const navButtons = [...document.querySelectorAll('[data-nav]')];
   const explore = document.querySelector('.explore'), contents = document.querySelector('.contents'), endEl = document.querySelector('.end');
+  const cardItems = [...document.querySelectorAll('.cards li')], cardOn = cardItems.map(() => false);
+  let cardFree = 0;
   const reduced = matchMedia('(prefers-reduced-motion: reduce)');
+  // 箭头流动：把箭头换成同一格里叠着的两支，鼠标移上去（或键盘聚焦）时整组顺着箭头方向移动一格；播完才接受下一次
+  const AF_DIR = { '↗': [1, -1], '→': [1, 0], '↓': [0, 1], '↑': [0, -1] };
+  const afHTML = (glyph, [dx, dy], cls = '') => `<span class="af${cls && ' ' + cls}" style="--dx:${dx};--dy:${dy}" aria-hidden="true"><span class="af-in"><span>${glyph}</span><span>${glyph}</span></span></span>`;
+  function arrowFlow(host, trigger = host, dir) {
+    const glyph = host.innerHTML.trim();
+    const d = dir || AF_DIR[glyph] || [0, 1];
+    host.innerHTML = afHTML(glyph, d, d[0] && d[1] ? 'diag' : '');
+    const af = host.firstElementChild;
+    const play = () => { if (!reduced.matches) af.classList.add('go'); };
+    af.addEventListener('animationend', () => af.classList.remove('go'));
+    trigger.addEventListener('pointerenter', play);
+    trigger.addEventListener('focus', play);
+    return af;
+  }
   const LAST = STAGES.length - 1;
 
   const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
@@ -107,7 +126,10 @@
     if (!started && (all || ahead > READY_FRAME || (deepWork >= 0 && frames[LAST_SLOT]))) {
       started = true; document.body.classList.add('ready'); dirty = true;
       keepDecoded(deepWork >= 0 ? LAST_SLOT : Math.max(0, lastFrame), dir);   // 进入页面前先把走近的帧解码好，第一次滑动就不卡
-      if (!reduced.matches && !introDone) introStart = performance.now() + INTRO_DELAY; else introDone = true;
+      if (deepWork < 0) {
+        if (reduced.matches) w = 0;
+        else { const now = performance.now(); tween = { from: w, to: 0, stage: 0, start: now + INTRO_DELAY, dur: W0 * 1000 }; tweenLast = now; }
+      }
     }
     // 从作品链接直接打开时，先把目录那一帧解码好，关闭阅读页时背景才有画面
     if (deepWork >= 0) { if (loadedFrames <= 48) { keepDecoded(LAST_SLOT, 1); dirty = true; } }
@@ -172,7 +194,8 @@
   // ---------- 滚动轨道 ----------
   // ---------- 位置：w 为从首页起按 rate 播放到当前画面的秒数 ----------
   // 不用页面滚动：滚轮、手指、键盘只负责"去下一个/上一个停点"，动作按原视频节奏整段播完
-  let vw, vh, dpr, scale, ox, oy, portrait;
+  let vw, vh, dpr, scale, ox, oy, portrait, splitMax = 0;
+  const TITLE_NEAR = .62, TITLE_PORTRAIT = .88;   // 近景时标题的缩放比例；竖屏老虎铺满屏幕，标题改到左下角文字上方
   const W0 = wallAt(INTRO_T);
   const stageW = STAGES.map(s => wallAt(s.t) - W0);
   stageW[END_STAGE] = stageW[CONTENTS_STAGE] + END_W;
@@ -185,6 +208,9 @@
     scale = Math.max(vw / SRC_W, vh / SRC_H);
     ox = (vw - SRC_W * scale) / 2;
     oy = (vh - SRC_H * scale) / 2;
+    // 近景时标题缩小，PORT 和 FOLIO 左右贴到屏幕边距内，完整摆在老虎两侧
+    const titleW = document.querySelector('.title .l').offsetWidth + document.querySelector('.title .r').offsetWidth;
+    splitMax = (vw / 2 - titleW * TITLE_NEAR / 2 - vw * .03) / TITLE_NEAR;
     dirty = true;
   }
 
@@ -220,25 +246,38 @@
   let lastScene = '';
   function updateText(t) {
     const css = (k, v) => root.style.setProperty(k, v);
-    const u = smoothstep(INTRO_T + 0.2, 6.2, t);
-    css('--split', `${(u * vw * (portrait ? .2 : .13)).toFixed(1)}px`);
-    css('--tk', (1 + u * .12).toFixed(4));
-    css('--ty', `${(-u * vh * .035).toFixed(1)}px`);
+    const u = smoothstep(2.4, 6.2, t);
+    css('--split', `${(portrait ? 0 : u * splitMax).toFixed(1)}px`);
+    css('--tk', (portrait ? TITLE_PORTRAIT : 1 - u * (1 - TITLE_NEAR)).toFixed(4));
+    css('--ty', `${(portrait ? 0 : -u * vh * .035).toFixed(1)}px`);
     const titleO = 1 - smoothstep(7.6, 8.6, t);
     css('--title-o', titleO.toFixed(3));
     css('--intro-o', (1 - smoothstep(INTRO_T + 0.15, INTRO_T + 1.4, t)).toFixed(3));
-    // EXPLORE：开场走近时就出现，老虎转身前淡出
-    const ex = smoothstep(0.9, 2.0, t) * (1 - smoothstep(7.2, 7.9, t));
+    // EXPLORE：老虎走到近景时出现并开始水波纹；点击后打出一圈波纹，随老虎转身淡出
+    const ex = smoothstep(5.1, 6.1, t) * (1 - smoothstep(6.75, 7.35, t));
     css('--explore-o', ex.toFixed(3));
     explore.classList.toggle('on', ex > .5);
-    const co = smoothstep(10.6, 12.4, t);
+    const leaving = !!tween && tween.stage !== 0 && tween.to > w;
+    explore.classList.toggle('pulse', ex > .6 && !leaving);
+    explore.classList.toggle('go', leaving && ex > .02);
+    const co = smoothstep(10.6, 12.4, t);   // CONTENTS 和目录随着老虎走出画面一起出现
     // 结尾：e 为 0–1，目录淡出、卡片沉下，THANK YOU 和下载浮现
     const e = clamp((w - stageW[CONTENTS_STAGE]) / END_W, 0, 1);
     const coEnd = co * (1 - smoothstep(0, .55, e));
     css('--contents-o', coEnd.toFixed(3));
     css('--head-y', `${((1 - co) * 30 - e * 26).toFixed(1)}px`);
     contents.classList.toggle('on', co > .6 && e < .5);
-    contents.classList.toggle('in', t > CARDS_T && e < .22);
+    const nowMs = performance.now();
+    cardItems.forEach((li, k) => {
+      const on = t > CARD_T[k] && e < .22;
+      if (on === cardOn[k]) return;
+      cardOn[k] = on;
+      const wait = on ? Math.max(0, cardFree - nowMs) : 0;   // 收起时不排队，一起走
+      if (on) cardFree = nowMs + wait + CARD_GAP;
+      li.style.transitionDelay = wait ? `${Math.round(wait)}ms` : '';
+      li.style.setProperty('--d', `${Math.round(wait)}ms`);   // 卡片的淡入动画用同一个延迟
+      li.classList.toggle('show', on);
+    });
     const eo = smoothstep(.4, 1, e);
     css('--end-o', eo.toFixed(3));
     css('--end-y', `${((1 - eo) * 30).toFixed(1)}px`);
@@ -247,7 +286,7 @@
     const scene = e > .5 ? 'end' : t > 11 ? 'contents' : 'portfolio';
     if (scene !== lastScene) {
       lastScene = scene;
-      const info = { portfolio: ['01', 'PORTFOLIO', '0', ''], contents: ['02', 'CONTENTS', '2', '继续下滑 <span>↓</span>'], end: ['03', 'THANK YOU', '3', '向上回到目录 <span>↑</span>'] }[scene];
+      const info = { portfolio: ['01', 'PORTFOLIO', '0', ''], contents: ['02', 'CONTENTS', '1', '继续下滑' + afHTML('↓', AF_DIR['↓'], 'loop')], end: ['03', 'THANK YOU', '2', '向上回到目录' + afHTML('↑', AF_DIR['↑'], 'loop')] }[scene];
       document.getElementById('sceneNo').textContent = info[0];
       document.getElementById('sceneName').textContent = info[1];
       navButtons.forEach(b => b.setAttribute('aria-current', String(b.dataset.nav === info[2])));
@@ -256,25 +295,19 @@
     return titleO > .01;
   }
 
-  let w = 0, dirty = true, hold = 0, dir = 1, lastFrame = -1;
-  let introStart = 0, introDone = false;   // introStart 为 0：还没加载完，停在第一帧
-  // 开场播到第几秒：缓起缓停，像走几步停下；一有操作就结束开场
-  function introTime(now) {
-    if (!introStart) return 0;
-    const x = clamp((now - introStart) / (INTRO_SECS * 1000), 0, 1);
-    if (x >= 1) introDone = true;
-    return INTRO_T * (1 - Math.cos(Math.PI * x)) / 2;
-  }
+  let w = -W0, dirty = true, hold = 0, dir = 1, lastFrame = -1, sceneVer = 0, titleShown = true;   // 从第 0 秒开始，开场走到 w=0 就是近景
   function draw(now) {
     fctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     fctx.imageSmoothingQuality = 'high';
-    const t = introDone ? timeAtW(w) : introTime(now);
+    const t = timeAtW(w);
     const i = nearDecoded(frameAt(t), tween && tween.fast ? 16 : 4);
     const st = STAGES[stageAt(w)];
     if (st.hold) anchor = st.hold;
     zoom = 1 + (st.zoom || 0) * hold * hold * (3 - 2 * hold);
     drawFilm(i);
-    drawFront(i, updateText(t));
+    titleShown = updateText(t);
+    drawFront(i, titleShown);
+    sceneVer++;
     if (i !== lastFrame) { keepDecoded(i, dir); lastFrame = i; }
   }
 
@@ -287,11 +320,12 @@
     if (tween) stepTween(now);
     // 停在带 hold 的停点：定格并缓慢推近；一动就快速退回
     const n = stageAt(w);
-    const resting = introDone && !tween && !dragging && STAGES[n].hold && Math.abs(w - stageW[n]) < 0.01 && !reduced.matches;
+    const resting = !tween && !dragging && STAGES[n].hold && Math.abs(w - stageW[n]) < 0.01 && !reduced.matches;
     const h = resting ? Math.min(1, hold + dt / HOLD_SECS) : Math.max(0, hold - dt * 2.5);
     const holdChanged = h !== hold;
     hold = h;
-    if (moving || holdChanged || dirty || (!introDone && introStart)) { draw(now); dirty = false; }
+    if (moving || holdChanged || dirty) { draw(now); dirty = false; }
+    if (glass) glass.frame(now);
     requestAnimationFrame(tick);
   }
 
@@ -300,7 +334,6 @@
   // fast：快进（播放中同方向再滑一次、点顶部导航），剩下的动作约 1 秒播完，画面仍是连续的
   function goTo(i, fast) {
     i = clamp(i, 0, LAST);
-    introDone = true;
     const to = stageW[i];
     if (tween && tween.stage === i && (!fast || tween.fast)) return;
     if (Math.abs(to - w) < 0.005) { tween = null; w = to; settled = i; dirty = true; return; }
@@ -320,7 +353,7 @@
     keepDecoded(Math.max(0, lastFrame), dir);   // 方向一变，立刻把前方的帧排上解码
   }
   function stepTween(now) {
-    const t = Math.min(1, (now - tween.start) / tween.dur);
+    const t = clamp((now - tween.start) / tween.dur, 0, 1);
     let e;
     if (tween.fast) {
       // 起点接上当前速度，中段加快，结尾缓停
@@ -347,7 +380,10 @@
   // 滚轮：一次滑动只触发一次。停顿超过 220ms 才算新的一次，所以松手后的惯性滚动全部忽略
   let wheelLast = 0, wheelAcc = 0, wheelArmed = true;
   addEventListener('wheel', e => {
-    if (openIdx >= 0) { readerWheel(e); return; }
+    if (openIdx >= 0) {   // 作品页是普通滚动；鼠标停在顶部导航上时也能滚
+      if (zoomer.hidden && e.target.closest && e.target.closest('.header')) { e.preventDefault(); reader.scrollBy(0, e.deltaY * (e.deltaMode === 1 ? 16 : 1)); }
+      return;
+    }
     e.preventDefault();
     const now = performance.now();
     const dy = e.deltaY * (e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? vh : 1), a = Math.abs(dy);
@@ -370,13 +406,7 @@
   }, { passive: true });
   addEventListener('keydown', e => {
     if (openIdx >= 0) {
-      if (e.key === 'Escape') { e.preventDefault(); if (!zoomer.hidden) closeZoom(); else closeWork(); return; }
-      if (!zoomer.hidden || e.repeat || ((e.key === ' ' || e.key === 'Enter') && e.target.closest('button, a'))) return;
-      const forward = ['ArrowRight', 'ArrowDown', 'PageDown'].includes(e.key) || (e.key === ' ' && !e.shiftKey);
-      const back = ['ArrowLeft', 'ArrowUp', 'PageUp'].includes(e.key) || (e.key === ' ' && e.shiftKey);
-      if (forward || back) { e.preventDefault(); flip(at + (forward ? 1 : -1)); }
-      else if (e.key === 'Home') { e.preventDefault(); flip(0); }
-      else if (e.key === 'End') { e.preventDefault(); flip(slides().length - 1); }
+      if (e.key === 'Escape') { e.preventDefault(); if (!zoomer.hidden) closeZoom(); else closeWork(); }
       return;
     }
     if ((e.key === ' ' || e.key === 'Enter') && e.target.closest('button, a')) return;
@@ -396,8 +426,22 @@
     if (n !== CONTENTS_STAGE) afterClose = () => goTo(n, true);
     closeWork();
   }));
-  // EXPLORE：和往下滑一次一样，播放中再点就快进
-  explore.addEventListener('click', () => step(1));
+  // EXPLORE：老虎走出画面，然后目录展现
+  explore.addEventListener('click', () => goTo(CONTENTS_STAGE));
+  arrowFlow(explore.querySelector('i'), explore, [0, 1]);
+  arrowFlow(document.querySelector('.dl-btn i'), document.querySelector('.dl'), [0, 1]);
+  document.querySelectorAll('[data-work]').forEach(card => arrowFlow(card.querySelector('.top i'), card));
+  // 鼠标靠近时按钮被轻轻吸过去，离开后弹回
+  if (matchMedia('(hover: hover)').matches) {
+    const RANGE = 150, PULL = .24, MAX = 14;
+    addEventListener('pointermove', e => {
+      if (!explore.classList.contains('on')) return;
+      const r = explore.getBoundingClientRect(), dx = e.clientX - (r.left + r.width / 2), dy = e.clientY - (r.top + r.height / 2), d = Math.hypot(dx, dy);
+      const k = d < RANGE ? Math.min(MAX / Math.max(d, 1), PULL) : 0;
+      explore.style.setProperty('--mx', `${(dx * k).toFixed(1)}px`);
+      explore.style.setProperty('--my', `${(dy * k).toFixed(1)}px`);
+    }, { passive: true });
+  }
 
   // 底部进度条：按住拖动可以逐帧看动作，松手后顺着拖动的方向把这段动作播完
   const bar = document.querySelector('.bar');
@@ -408,7 +452,7 @@
     dir = Math.sign(nw - w) || dir;
     w = nw; dirty = true;
   };
-  bar.addEventListener('pointerdown', e => { dragging = true; introDone = true; tween = null; bar.setPointerCapture(e.pointerId); dragTo(e); });
+  bar.addEventListener('pointerdown', e => { dragging = true; tween = null; bar.setPointerCapture(e.pointerId); dragTo(e); });
   bar.addEventListener('pointermove', e => { if (dragging) dragTo(e); });
   const dragEnd = () => {
     if (!dragging) return;
@@ -429,17 +473,17 @@
     { slug: 'cai-ling-tong', no: '03', title: '采灵通', focal: '6% 50%', pages: ['采销数智化 SaaS 平台项目封面', '业务背景', '竞品分析', '制定规范', '高效经营概览与数据决策', '高效检索与批量处理', '结构化表单与准入辅助设计', '可视化搭建与灵活配置', '可视化搭建与桌面端渲染'] },
     { slug: 'other-works', no: '04', title: '其他作品', focal: '70% 50%', pages: ['AI 赋能运营设计：开学元气补给', 'AI 赋能运营设计：开学焕新计划', 'AI 赋能运营设计：活动主视觉', 'AI 赋能运营设计：大会主视觉', 'AI 赋能运营设计：数据大屏', 'AI 赋能运营设计：数据大屏'] },
   ];
-  const MORPH_MS = 620, MORPH_EASE = 'cubic-bezier(.22,1,.36,1)', PAGE_RADIUS = .0125;
+  const MORPH_MS = 620, MORPH_EASE = 'cubic-bezier(.22,1,.36,1)', PAGE_RADIUS = 0;
   const $ = id => document.getElementById(id);
-  const reader = $('reader'), rPages = $('rPages'), rEnd = $('rEnd'), rStage = $('rStage'), rRail = $('rRail'), rPrev = $('rPrev'), rNext = $('rNext');
+  const reader = $('reader'), rPages = $('rPages'), rEnd = $('rEnd');
   const zoomer = $('zoomer'), zScroll = $('zScroll'), zImg = $('zImg');
   const cards = [...document.querySelectorAll('[data-work]')];
   const narrow = matchMedia('(max-aspect-ratio:4/5)');
   const sleep = ms => new Promise(r => setTimeout(r, ms));
   const sheetOf = (i, p) => `works/wk-${i + 1}-${p >> 1}.webp`;
   const slotPos = p => (p & 1 ? '0 100%' : '0 0');
-  let afterClose = null, openIdx = -1, busy = false, pushed = false, returnFocus = null, at = 0, flying = null, flipToken = 0, swiped = false;
-  const savedAt = {};   // 每个作品看到第几页，再次打开时接着看
+  let afterClose = null, openIdx = -1, busy = false, pushed = false, returnFocus = null;
+  const savedTop = {};   // 每个作品看到哪里，再次打开时接着看
 
   const hashOf = i => `#/works/${WORKS[i].slug}`;
   const parseHash = () => {
@@ -481,15 +525,22 @@
       a.className = 'r-next'; a.href = hashOf(i + 1);
       a.innerHTML = `<span class="r-next-text"><small>下一个作品</small><b>${n.no}</b><strong>${n.title}</strong></span><span class="r-thumb"></span><i aria-hidden="true">→</i>`;
       a.querySelector('.r-thumb').append(coverCanvas(i + 1));
+      arrowFlow(a.querySelector('i'), a);
       a.addEventListener('click', e => { e.preventDefault(); switchWork(i + 1); });
       rEnd.append(a);
     } else {
       const p = document.createElement('p');
       p.className = 'r-done'; p.textContent = '四个作品已全部看完';
       rEnd.append(p);
-      const dl = document.createElement('button');
-      dl.className = 'r-download'; dl.innerHTML = '下载完整作品集 <i aria-hidden="true">↓</i>';
-      dl.addEventListener('click', () => { afterClose = () => goTo(END_STAGE, true); closeWork(); });
+      const dl = document.createElement('a');
+      dl.className = 'r-download'; dl.href = PDF_URL; dl.innerHTML = '<span>下载完整作品集</span><i aria-hidden="true">↓</i>';
+      const dlText = dl.firstChild, dlArrow = dl.lastChild;
+      arrowFlow(dlArrow, dl);
+      const dlShow = st => { dlText.textContent = st === 'ok' ? '已开始下载' : st === 'fail' ? '下载没有成功，请再试一次' : '下载完整作品集'; dlArrow.hidden = !!st; };
+      bindDownload(dl, st => {
+        dlShow(st);
+        if (st === 'ok') setTimeout(() => dlShow(''), 2400);
+      });
       rEnd.append(dl);
     }
     const back = document.createElement('button');
@@ -503,110 +554,26 @@
     $('rTitle').textContent = work.title;
     $('rOf').textContent = work.pages.length;
     rPages.innerHTML = work.pages.map((alt, p) =>
-      `<figure class="r-page"><img data-src="${sheetOf(i, p)}" alt="${alt}" width="2560" height="1440" decoding="async" style="object-position:${slotPos(p)}"></figure>`
+      `<figure class="r-page"><img src="${sheetOf(i, p)}" alt="${alt}" width="2560" height="1440" decoding="async" style="object-position:${slotPos(p)}"></figure>`
     ).join('');
-    rPages.append(rEnd);
-    rRail.innerHTML = work.pages.map((alt, p) => `<button class="r-tick" aria-label="第 ${p + 1} 页：${alt}" title="${alt}"></button>`).join('');
+    // 一个作品总共不到 2MB，打开时全部解码好，快速滑动也不会露出底色
+    rPages.querySelectorAll('img').forEach(img => img.decode().catch(() => {}));
     fillEnd(i);
-    syncPager();
   }
   const pageEls = () => [...rPages.querySelectorAll('.r-page')];
-  const slides = () => [...rPages.children];
-  const lastPageEl = () => { const els = pageEls(); return els[Math.min(at, els.length - 1)]; };
-  // 一张图里有两页，提前把前后几页要用的图读好，翻页时不会露底色
-  function loadImg(el) {
-    const img = el && el.querySelector('img');
-    if (img && !img.getAttribute('src')) { img.src = img.dataset.src; img.decode().catch(() => {}); }
-    return img;
+  // 无缝长页：滚动完全交给浏览器，这里只根据位置算页码和进度
+  function currentIndex() {
+    const first = rPages.firstElementChild, n = rPages.childElementCount;
+    if (!first) return 0;
+    return clamp(Math.floor((reader.scrollTop + reader.clientHeight / 2 - rPages.offsetTop) / first.offsetHeight), 0, n - 1);
   }
-  function syncPager() {
-    const s = slides(), n = s.length - 1;
-    s.forEach((el, k) => el.classList.toggle('on', k === at));
-    for (let k = at - 1; k <= at + 2; k++) loadImg(s[k]);
-    $('rAt').textContent = Math.min(at + 1, n);
-    [...rRail.children].forEach((b, k) => {
-      b.classList.toggle('done', k <= at);
-      if (k === at) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current');
-    });
-    rPrev.hidden = at === 0;
-    rNext.hidden = at === n;
-    reader.classList.toggle('at-end', at === n);
+  const currentPageEl = () => pageEls()[currentIndex()];
+  function syncProgress() {
+    const max = reader.scrollHeight - reader.clientHeight;
+    $('rAt').textContent = currentIndex() + 1;
+    $('rLine').style.transform = `scaleX(${max > 0 ? clamp(reader.scrollTop / max, 0, 1) : 0})`;
   }
-
-  // 翻页：页面框不动，下一页淡入盖住当前页，画面同时从略大的尺寸缓缓落定，延续首页的镜头推近
-  // 先让当前页淡出，再让下一页淡入，避免两页文字叠在一起看不清
-  const OUT_MS = 200, IN_DELAY = 120, IN_MS = 380, PUSH_MS = 900, PUSH_SCALE = 1.045, PUSH_EASE = 'cubic-bezier(.16,1,.3,1)';
-  function landFlip() {
-    if (!flying) return;
-    const f = flying;
-    flying = null;
-    f.anims.forEach(a => a.cancel());
-    f.els.forEach(el => el.classList.remove('fly', 'upper'));
-  }
-  function pushIn(incoming, outgoing) {
-    incoming.classList.add('fly', 'upper');
-    outgoing.classList.add('fly');
-    const pushes = [...incoming.children].map(c => c.animate([{ transform: `scale(${PUSH_SCALE})` }, { transform: 'none' }], { duration: PUSH_MS, delay: IN_DELAY, easing: PUSH_EASE, fill: 'backwards' }));
-    const anims = [
-      outgoing.animate([{ opacity: 1 }, { opacity: 0 }], { duration: OUT_MS, easing: 'ease-in', fill: 'forwards' }),
-      incoming.animate([{ opacity: 0 }, { opacity: 1 }], { duration: IN_MS, delay: IN_DELAY, easing: 'ease-out', fill: 'backwards' }),
-      ...pushes,
-    ];
-    const mine = { els: [incoming, outgoing], anims };
-    flying = mine;
-    pushes[0].onfinish = () => { if (flying === mine) landFlip(); };
-  }
-  async function flip(to) {
-    if (busy || openIdx < 0 || !zoomer.hidden) return;
-    landFlip();
-    const s = slides();
-    if (to < 0 || to >= s.length || to === at) return;
-    const token = ++flipToken, img = loadImg(s[to]);
-    if (img && !img.complete) {
-      await Promise.race([img.decode().catch(() => {}), sleep(260)]);
-      if (token !== flipToken || openIdx < 0) return;
-    }
-    const outgoing = s[at];
-    at = to;
-    syncPager();
-    if (!reduced.matches) pushIn(s[to], outgoing);
-  }
-
-  // 滚轮和触控板：一次滑动翻一页，松手后的惯性全部忽略，和首页同样的判断
-  let rWheelLast = 0, rWheelArmed = true, rWheelAcc = 0;
-  function readerWheel(e) {
-    if (e.ctrlKey || !zoomer.hidden) return;   // 触控板双指捏合是缩放；放大图自己滚动
-    e.preventDefault();
-    const now = performance.now(), major = Math.abs(e.deltaY) >= Math.abs(e.deltaX) ? e.deltaY : e.deltaX;
-    const v = major * (e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? innerHeight : 1);
-    if (now - rWheelLast > 220 || (!rWheelArmed && Math.abs(v) > 12 && Math.sign(v) !== Math.sign(rWheelAcc))) { rWheelArmed = true; rWheelAcc = 0; }
-    rWheelLast = now;
-    if (!rWheelArmed) return;
-    rWheelAcc += v;
-    if (Math.abs(rWheelAcc) > 24) { rWheelArmed = false; flip(at + Math.sign(rWheelAcc)); }
-  }
-  rPrev.addEventListener('click', () => flip(at - 1));
-  rNext.addEventListener('click', () => flip(at + 1));
-  rRail.addEventListener('click', e => {
-    const b = e.target.closest('.r-tick');
-    if (b) flip([...rRail.children].indexOf(b));
-  });
-
-  // 手指：往上或往左滑看下一页，往下或往右滑看上一页
-  let touch = null;
-  rStage.addEventListener('touchstart', e => {
-    swiped = false;
-    touch = e.touches.length > 1 ? null : { x: e.touches[0].clientX, y: e.touches[0].clientY };
-  }, { passive: true });
-  rStage.addEventListener('touchend', e => {
-    if (!touch) return;
-    const t = e.changedTouches[0], dx = t.clientX - touch.x, dy = t.clientY - touch.y;
-    const major = Math.abs(dy) >= Math.abs(dx) ? dy : dx;
-    touch = null;
-    if (Math.abs(major) < 36) return;
-    swiped = true;
-    flip(at + (major < 0 ? 1 : -1));
-  }, { passive: true });
+  reader.addEventListener('scroll', syncProgress, { passive: true });
 
   // 卡片和页面之间的过渡：用封面图从一个位置放大/缩小到另一个位置
   function flight(i, from, to) {
@@ -627,14 +594,15 @@
     busy = true;
     openIdx = i;
     returnFocus = cards[i];
-    at = savedAt[i] || 0;
     document.body.classList.add('reading');
     buildPages(i);
     reader.hidden = false;
+    reader.scrollTop = savedTop[i] || 0;
+    syncProgress();
     if (push) pushHash(i);
     const motion = !instant && !reduced.matches && coversImg;
     const card = cards[i];
-    const target = lastPageEl();
+    const target = currentPageEl();
     if (motion) {
       card.style.visibility = 'hidden';
       const f = flight(i, rectOf(card, 20), rectOf(target, pageRadius(target)));
@@ -657,12 +625,10 @@
     const i = openIdx;
     if (i < 0 || busy) return;
     busy = true;
-    flipToken++;
-    landFlip();
-    savedAt[i] = at < WORKS[i].pages.length ? at : 0;   // 看完了下次从头开始
+    savedTop[i] = reader.scrollTop + reader.clientHeight / 2 < rEnd.offsetTop ? reader.scrollTop : 0;   // 看完了下次从头开始
     const card = cards[i];
     if (!reduced.matches && coversImg) {
-      const page = lastPageEl();
+      const page = currentPageEl();
       const f = flight(i, rectOf(page, pageRadius(page)), rectOf(card, 20));
       card.style.visibility = 'hidden';
       reader.classList.remove('pages-in');
@@ -697,15 +663,14 @@
   async function switchWork(i) {
     if (busy || openIdx < 0 || i === openIdx) return;
     busy = true;
-    savedAt[openIdx] = 0;
-    flipToken++;
-    landFlip();
+    savedTop[openIdx] = 0;
     reader.classList.remove('pages-in');
     await sleep(reduced.matches ? 0 : 240);
     openIdx = i;
     returnFocus = cards[i];
-    at = 0;
     buildPages(i);
+    reader.scrollTop = 0;
+    syncProgress();
     replaceHash(i);
     await firstReady(pageEls()[0]);
     reader.classList.add('pages-in');
@@ -751,30 +716,41 @@
   }
   rPages.addEventListener('click', e => {
     const img = e.target.closest('.r-page img');
-    if (img && narrow.matches && !swiped) openZoom(img);
+    if (img && narrow.matches) openZoom(img);
   });
   $('zClose').addEventListener('click', closeZoom);
 
   // ---------- 结尾页：下载完整作品集、联系方式、再看一遍 ----------
   const PDF_NAME = (CONTACT.name ? CONTACT.name + '-' : '') + 'UI作品集-2026.pdf';
-  const dlLink = document.querySelector('.dl');
-  dlLink.setAttribute('download', PDF_NAME);
+  const PDF_URL = 'portfolio/portfolio-2026.pdf';
   document.getElementById('dlAgain').addEventListener('click', () => goTo(0, true));
-  // 预览环境不能直接下载，要走它提供的保存确认；正式部署后就是浏览器直接下载
-  dlLink.addEventListener('click', async e => {
-    if (!window.claude || !window.claude.use) return;
-    e.preventDefault();
-    const label = dlLink.querySelector('.dl-state');
-    try {
-      label.textContent = '准备中…';
-      const dl = await window.claude.use('downloads');
-      if (!dl) { label.textContent = ''; window.open(dlLink.href, '_blank'); return; }
-      const blob = await (await fetch(dlLink.href)).blob();
-      label.textContent = '';
-      await dl.save({ filename: PDF_NAME, data: blob });
-    } catch (err) {
-      label.textContent = err && err.code === 'declined' ? '' : '下载没有成功，请再试一次';
-    }
+  // 点击直接下载；预览环境不能直接下载，要走它提供的保存确认
+  function bindDownload(link, show) {
+    link.setAttribute('download', PDF_NAME);
+    link.addEventListener('click', async e => {
+      if (!window.claude || !window.claude.use) { show('ok'); return; }
+      e.preventDefault();
+      try {
+        const dl = await window.claude.use('downloads');
+        if (!dl) { window.open(link.href, '_blank'); return; }
+        const blob = await (await fetch(link.href)).blob();
+        await dl.save({ filename: PDF_NAME, data: blob });
+        show('ok');
+      } catch (err) {
+        show(err && err.code === 'declined' ? '' : 'fail');
+      }
+    });
+  }
+  const navDl = document.getElementById('navDl'), navMark = navDl.lastElementChild, navAf = arrowFlow(navMark, navDl);
+  bindDownload(navDl, st => {
+    navMark.replaceChildren(st === 'ok' ? '✓' : st === 'fail' ? '!' : navAf);
+    if (st) setTimeout(() => navMark.replaceChildren(navAf), 2000);
+  });
+  arrowFlow(document.querySelector('#dlAgain span'), document.getElementById('dlAgain'));
+  const dlState = document.querySelector('.dl-state');
+  bindDownload(document.querySelector('.dl'), st => {
+    dlState.textContent = st === 'ok' ? '已开始下载' : st === 'fail' ? '下载没有成功，请再试一次' : '';
+    if (st === 'ok') setTimeout(() => { dlState.textContent = ''; }, 2400);
   });
   (function fillContact() {
     const box = document.getElementById('endContact');
@@ -793,11 +769,275 @@
     box.hidden = !box.childElementCount;
   })();
 
+
+  // ---------- 鼠标冰晶尾巴：光点后面拖出一条会自己流动、打卷的透明雾尾，背后的画面（视频帧 + PORTFOLIO 标题 + 抠出的老虎）在里面变虚、轻微折射 ----------
+  // 照参考录屏：头部是一片较宽的透明液体，甩动时会卷成环、继续流动（灵动来自流体模拟）；
+  // 尾巴靠“变细”消失——只显示浓度过了门槛的部分，浓度下降时可见范围往里收，最后只剩一条细细的轮廓线再消失，不会晕成一团。
+  // 这一层在老虎之上、文字按钮之下；只在有鼠标的横屏电脑上开，停手后尾巴消失就整层休眠。
+  const glass = (() => {
+    // 形态按对比样片 A「适中灵动」：轻推力 + 强打卷，液体留在路径上原地卷动，不会被冲到末端堆成一团。
+    // 放进网站后存在感太强，又把雾调淡、虚化减半、亮边基本去掉、消失加快（haze/blur/edge/spec/diss）
+    const CFG = { push: .13, curl: 20, velR: .0015, dyeR: .003, amt0: .2, amtK: 700, diss: 1.25, a0: .12, a1: .26, b0: .14, b1: .8, useMax: 1, edge: .2, refr: .04, haze: .25, blur: 2.5, spec: .08 };
+    if (!matchMedia('(hover: hover) and (pointer: fine)').matches || reduced.matches) return null;
+    const canvas = document.getElementById('glass');
+    const gl = canvas && canvas.getContext('webgl2', { alpha: true, premultipliedAlpha: true, antialias: false });
+    if (!gl || !gl.getExtension('EXT_color_buffer_float')) { if (canvas) canvas.remove(); return null; }
+    const VS = `#version 300 es
+    precision highp float;
+    in vec2 aPos; uniform vec2 texel;
+    out vec2 vUv, vL, vR, vT, vB;
+    void main(){ vUv=aPos*.5+.5; vL=vUv-vec2(texel.x,0.); vR=vUv+vec2(texel.x,0.); vT=vUv+vec2(0.,texel.y); vB=vUv-vec2(0.,texel.y); gl_Position=vec4(aPos,0.,1.); }`;
+    const head = `#version 300 es
+    precision highp float; precision highp sampler2D;
+    in vec2 vUv, vL, vR, vT, vB; out vec4 o;\n`;
+    const FS = {
+      splat: `uniform sampler2D uT; uniform float aspect, radius, cap, useMax; uniform vec3 color; uniform vec2 point;
+        void main(){ vec2 p=vUv-point; p.x*=aspect; vec3 b=texture(uT,vUv).xyz, s=exp(-dot(p,p)/radius)*color;
+          o=vec4(useMax>.5?max(b,s):clamp(b+s,-cap,cap),1.); }`,   // 液体用取大不叠加：同一处反复经过也不会越堆越多
+      advect: `uniform sampler2D uVel, uSrc; uniform vec2 velTexel; uniform float dt, diss;
+        void main(){ vec2 c=vUv-dt*texture(uVel,vUv).xy*velTexel; o=clamp(texture(uSrc,c)/(1.+diss*dt),-3000.,3000.); if(any(isnan(o))) o=vec4(0.); }`,
+      div: `uniform sampler2D uVel;
+        void main(){ vec2 C=texture(uVel,vUv).xy; float L=texture(uVel,vL).x,R=texture(uVel,vR).x,T=texture(uVel,vT).y,B=texture(uVel,vB).y;
+          if(vL.x<0.)L=-C.x; if(vR.x>1.)R=-C.x; if(vT.y>1.)T=-C.y; if(vB.y<0.)B=-C.y; o=vec4(.5*(R-L+T-B),0.,0.,1.); }`,
+      curl: `uniform sampler2D uVel;
+        void main(){ float L=texture(uVel,vL).y,R=texture(uVel,vR).y,T=texture(uVel,vT).x,B=texture(uVel,vB).x; o=vec4(.5*(R-L-T+B),0.,0.,1.); }`,
+      vort: `uniform sampler2D uVel, uCurl; uniform float curl, dt;
+        void main(){ float L=texture(uCurl,vL).x,R=texture(uCurl,vR).x,T=texture(uCurl,vT).x,B=texture(uCurl,vB).x,C=texture(uCurl,vUv).x;
+          vec2 f=.5*vec2(abs(T)-abs(B),abs(R)-abs(L)); f/=length(f)+1e-4; f*=curl*C; f.y*=-1.;
+          o=vec4(clamp(texture(uVel,vUv).xy+f*dt,-1000.,1000.),0.,1.); }`,
+      press: `uniform sampler2D uP, uDiv;
+        void main(){ float L=texture(uP,vL).x,R=texture(uP,vR).x,T=texture(uP,vT).x,B=texture(uP,vB).x; o=vec4((L+R+T+B-texture(uDiv,vUv).x)*.25,0.,0.,1.); }`,
+      grad: `uniform sampler2D uP, uVel;
+        void main(){ float L=texture(uP,vL).x,R=texture(uP,vR).x,T=texture(uP,vT).x,B=texture(uP,vB).x; o=vec4(texture(uVel,vUv).xy-vec2(R-L,T-B),0.,1.); }`,
+      scale: `uniform sampler2D uT; uniform float k; void main(){ o=k*texture(uT,vUv); }`,
+      show: `uniform sampler2D uDye, uVel, uFilm, uTitle, uFront; uniform vec2 dyeTexel, velTexel; uniform float time, a0, a1, b0, b1, edge, refr, haze, blur, spec; uniform int hasTitle, hasFront;
+        float dd(vec2 uv){ float d=texture(uDye,uv).x; return isnan(d)||isinf(d)?0.:clamp(d,0.,4.); }
+        float body(vec2 uv){ return smoothstep(b0,b1,dd(uv)); }
+        vec3 scene(vec2 uv){
+          vec2 s=clamp(vec2(uv.x,1.-uv.y),0.,1.);
+          vec3 c=texture(uFilm,s).rgb;
+          if(hasTitle==1){ vec4 t=texture(uTitle,s); c=mix(c,t.rgb,t.a); }
+          if(hasFront==1){ vec4 f=texture(uFront,s); c=mix(c,f.rgb,f.a); }
+          return c;
+        }
+        void main(){
+          float d=dd(vUv), a=smoothstep(a0,a1,d);   // 门槛：浓度下降时可见范围往里收，尾巴变细消失
+          if(a<.003){ o=vec4(0.); return; }
+          float c=body(vUv);
+          vec2 e=dyeTexel*1.5;
+          vec2 n=vec2(body(vUv+vec2(e.x,0.))-body(vUv-vec2(e.x,0.)), body(vUv+vec2(0.,e.y))-body(vUv-vec2(0.,e.y)));
+          float g=length(n);
+          vec2 fl=clamp(texture(uVel,vUv).xy*velTexel,-6.,6.)*.006*c;
+          vec2 base=vUv-(n*refr+fl);                   // 轻微折射 + 顺着流速的扭曲
+          float r=1.+blur*c;                          // 磨砂：越厚越虚
+          vec3 acc=vec3(0.);
+          for(int k=0;k<10;k++){ float fk=float(k), an=fk*2.39996, rr=r*sqrt((fk+.5)/10.); acc+=scene(base+vec2(cos(an),sin(an))*rr*dyeTexel); }
+          vec3 col=acc/10.;
+          col=mix(col,vec3(.95,.97,1.),haze*c)+.02*c;  // 薄薄一层白雾
+          float rim=smoothstep(.05,.4,g)*(1.-c*.6);   // 外沿一条细细的冰蓝淡金轮廓
+          col+=mix(vec3(.78,.9,1.),vec3(1.,.86,.6),.5+.5*sin(time*.5+vUv.x*4.))*rim*edge;
+          vec3 N=normalize(vec3(-n*3.,1.));
+          col+=pow(max(dot(N,normalize(vec3(-.45,.55,1.))),0.),40.)*spec*c;
+          o=vec4(col*a,a)*.94;
+        }`,
+    };
+    const compile = (type, src) => { const sh = gl.createShader(type); gl.shaderSource(sh, src); gl.compileShader(sh); if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(sh)); return sh; };
+    const prog = {};
+    try {
+      const vs = compile(gl.VERTEX_SHADER, VS);
+      for (const [name, src] of Object.entries(FS)) {
+        const pr = gl.createProgram();
+        gl.attachShader(pr, vs); gl.attachShader(pr, compile(gl.FRAGMENT_SHADER, head + src));
+        gl.bindAttribLocation(pr, 0, 'aPos'); gl.linkProgram(pr);
+        if (!gl.getProgramParameter(pr, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(pr));
+        const u = {}, n = gl.getProgramParameter(pr, gl.ACTIVE_UNIFORMS);
+        for (let k = 0; k < n; k++) { const info = gl.getActiveUniform(pr, k); u[info.name] = gl.getUniformLocation(pr, info.name); }
+        prog[name] = { p: pr, u };
+      }
+    } catch (err) { console.warn('glass off:', err); canvas.remove(); return null; }
+    gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
+    gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+
+    const texParams = () => {
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    };
+    const targets = [];
+    function target(tw, th) {
+      const tex = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D, tex); texParams();
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, tw, th, 0, gl.RGBA, gl.HALF_FLOAT, null);
+      const fb = gl.createFramebuffer();
+      gl.bindFramebuffer(gl.FRAMEBUFFER, fb); gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+      const t = { tex, fb, w: tw, h: th, texel: [1 / tw, 1 / th] };
+      targets.push(t);
+      return t;
+    }
+    const pair = (tw, th) => ({ a: target(tw, th), b: target(tw, th), flip() { const x = this.a; this.a = this.b; this.b = x; } });
+    function clearAll() {
+      gl.clearColor(0, 0, 0, 0);
+      for (const t of targets) { gl.bindFramebuffer(gl.FRAMEBUFFER, t.fb); gl.viewport(0, 0, t.w, t.h); gl.clear(gl.COLOR_BUFFER_BIT); }
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.viewport(0, 0, canvas.width, canvas.height); gl.clear(gl.COLOR_BUFFER_BIT);
+    }
+    // 画面纹理：底层视频帧、标题（按 DOM 的位置和渐变画到一张画布上）、抠出的老虎
+    const sceneTex = [0, 1, 2].map(() => { const t = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, t); texParams(); return t; });
+    const titleCanvas = document.createElement('canvas'), tc = titleCanvas.getContext('2d');
+    const TITLE_PARTS = [
+      ['.title .l', [[0, '#111a4d'], [.45, '#1d2a66'], [.78, '#33508e'], [1, '#7d97c4']]],
+      ['.title .r', [[0, '#9fb2d6'], [.22, '#5b4aa0'], [.48, '#7a2c8c'], [.7, '#b51d7d'], [1, '#4c1b6e']]],
+    ].map(([sel, stops]) => [document.querySelector(sel), stops]);
+    function drawTitle() {
+      tc.setTransform(1, 0, 0, 1, 0, 0);
+      tc.clearRect(0, 0, titleCanvas.width, titleCanvas.height);
+      const op = parseFloat(root.style.getPropertyValue('--title-o'));
+      tc.globalAlpha = Number.isFinite(op) ? op : 1;
+      for (const [el, stops] of TITLE_PARTS) {
+        const r = el.getBoundingClientRect(), W = el.offsetWidth, H = el.offsetHeight;
+        if (!W) continue;
+        const k = r.width / W, cs = getComputedStyle(el);
+        tc.setTransform(dpr * k, 0, 0, dpr * k, r.left * dpr, r.top * dpr);
+        tc.font = `${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`;
+        if ('letterSpacing' in tc) tc.letterSpacing = cs.letterSpacing;
+        tc.textBaseline = 'alphabetic'; tc.textAlign = 'left';
+        const m = tc.measureText(el.textContent), asc = m.fontBoundingBoxAscent, desc = m.fontBoundingBoxDescent;
+        const y = (H - (asc + desc)) / 2 + asc;   // 和 CSS 一样：行高 .8 时字形按半行距居中
+        const ang = 100 * Math.PI / 180, dx = Math.sin(ang), dy = -Math.cos(ang), L = Math.abs(W * dx) + Math.abs(H * dy);
+        const grad = tc.createLinearGradient(W / 2 - dx * L / 2, H / 2 - dy * L / 2, W / 2 + dx * L / 2, H / 2 + dy * L / 2);
+        stops.forEach(([at, c]) => grad.addColorStop(at, c));
+        tc.fillStyle = grad;
+        tc.fillText(el.textContent, 0, y);
+      }
+    }
+    function upload(t, src) { gl.bindTexture(gl.TEXTURE_2D, t); gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, src); }
+
+    let vel, dye, pres, divT, curlT, cw = 0, ch = 0;
+    function size() {
+      if (film.width === cw && film.height === ch) return;
+      cw = film.width; ch = film.height;
+      canvas.width = cw; canvas.height = ch; titleCanvas.width = cw; titleCanvas.height = ch;
+      for (const t of targets) { gl.deleteTexture(t.tex); gl.deleteFramebuffer(t.fb); }
+      targets.length = 0;
+      const sim = s => [Math.max(8, Math.round(vw * s)), Math.max(8, Math.round(vh * s))];
+      const [a, b] = sim(1 / 7), [c, d] = sim(1 / 2);
+      vel = pair(a, b); pres = pair(a, b); divT = target(a, b); curlT = target(a, b); dye = pair(c, d);
+      clearAll();
+      uploadedVer = -1;
+    }
+    function run(name, out, uniforms) {
+      const { p, u } = prog[name];
+      gl.useProgram(p);
+      let unit = 0;
+      for (const [k, v] of Object.entries(uniforms)) {
+        if (!u[k]) continue;
+        if (v && v.tex) { gl.activeTexture(gl.TEXTURE0 + unit); gl.bindTexture(gl.TEXTURE_2D, v.tex); gl.uniform1i(u[k], unit++); }
+        else if (Array.isArray(v)) (v.length === 2 ? gl.uniform2fv : gl.uniform3fv).call(gl, u[k], v);
+        else gl.uniform1f(u[k], v);
+      }
+      gl.bindFramebuffer(gl.FRAMEBUFFER, out.fb); gl.viewport(0, 0, out.w, out.h);
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    }
+
+    // 输入：光点（比鼠标慢半拍）每帧走过的路段沿路打几下；液体量跟速度走，慢下来或停住几乎不加，光标处不会堆成一团
+    const splats = [], cur = { x: -99, y: -99, dx: -99, dy: -99, rx: -99, ry: -99, inside: false };
+    let lastHead = null, lastInput = -1e9, awake = false, warmed = false, uploadedVer = -1, t0 = performance.now(), prev = t0;
+    const blocked = () => portrait || document.body.classList.contains('reading') || !document.body.classList.contains('ready');
+    const dot = document.createElement('div'), ring = document.createElement('div');
+    dot.className = 'cur-dot'; ring.className = 'cur-ring';
+    document.body.append(dot, ring);
+    addEventListener('pointermove', e => {
+      if (e.pointerType !== 'mouse') return;
+      cur.x = e.clientX; cur.y = e.clientY;
+      if (!cur.inside) { cur.inside = true; cur.dx = cur.rx = cur.x; cur.dy = cur.ry = cur.y; lastHead = null; }
+      if (blocked()) return;
+      lastInput = performance.now();
+      if (!awake) { awake = true; size(); uploadedVer = -1; lastHead = null; }
+    }, { passive: true });
+    document.documentElement.addEventListener('mouseleave', () => { cur.inside = false; lastHead = null; });
+    addEventListener('blur', () => { cur.inside = false; lastHead = null; });
+    function record(dt) {
+      const x = cur.dx, y = cur.dy;
+      if (!lastHead) { lastHead = { x, y }; return; }
+      const mx = x - lastHead.x, my = y - lastHead.y, dist = Math.hypot(mx, my);
+      if (dist < .5) return;
+      const vx = mx / Math.max(dt, 1 / 240), vy = my / Math.max(dt, 1 / 240);
+      const steps = Math.min(10, Math.max(1, Math.ceil(dist / 12)));
+      for (let k = 1; k <= steps; k++) splats.push({ x: lastHead.x + mx * k / steps, y: lastHead.y + my * k / steps, vx, vy, n: steps });
+      lastHead = { x, y };
+    }
+
+    function sleep() {
+      awake = false; splats.length = 0; lastHead = null;
+      clearAll();   // 画布一直留在页面上，只是清成全透明；切换显示/隐藏会让浏览器重建图层，第一下会卡
+    }
+    function frame(now) {
+      const dt = Math.min((now - prev) / 1000, 1 / 30) || 0; prev = now;
+      // 光标跟随：光点追得快、细圈慢半拍；看作品时藏起来
+      const showCur = cur.inside && !blocked();
+      document.body.classList.toggle('cur-on', showCur);
+      if (showCur) {
+        cur.dx += (cur.x - cur.dx) * .3; cur.dy += (cur.y - cur.dy) * .3;
+        cur.rx += (cur.x - cur.rx) * .14; cur.ry += (cur.y - cur.ry) * .14;
+        dot.style.transform = `translate(${cur.dx.toFixed(1)}px,${cur.dy.toFixed(1)}px)`;
+        ring.style.transform = `translate(${cur.rx.toFixed(1)}px,${cur.ry.toFixed(1)}px)`;
+      }
+      // 预热：显卡第一次用这些着色器、第一次传大纹理时会卡几百毫秒，所以在加载画面还盖着时先空跑一帧
+      if (!warmed && !awake && !portrait) {
+        warmed = true;
+        size(); splats.push({ x: 0, y: 0, vx: 0, vy: 0, n: 1 }); simulate(dt, now); clearAll();
+        canvas.style.visibility = 'visible';
+        return;
+      }
+      if (!awake) return;
+      if (now - lastInput > 3200 || blocked()) { sleep(); return; }
+      if (showCur) record(dt);
+      simulate(dt, now);
+    }
+    function simulate(dt, now) {
+      size();
+      const aspect = vw / vh;
+      for (const s of splats) {
+        const pt = [s.x / vw, 1 - s.y / vh], speed = Math.hypot(s.vx, s.vy);
+        const vk = vel.a.w / vw * CFG.push / s.n;
+        run('splat', vel.b, { uT: vel.a, aspect, radius: CFG.velR, cap: 3000, useMax: 0, color: [s.vx * vk, -s.vy * vk, 0], point: pt, texel: vel.a.texel }); vel.flip();
+        run('splat', dye.b, { uT: dye.a, aspect, radius: CFG.dyeR, cap: 1.3, useMax: CFG.useMax, color: [Math.min(1, CFG.amt0 + speed / CFG.amtK) / (CFG.useMax ? 1 : Math.sqrt(s.n)), 0, 0], point: pt, texel: dye.a.texel }); dye.flip();
+      }
+      splats.length = 0;
+      const vt = vel.a.texel;
+      run('curl', curlT, { uVel: vel.a, texel: vt });
+      run('vort', vel.b, { uVel: vel.a, uCurl: curlT, curl: CFG.curl, dt, texel: vt }); vel.flip();
+      run('div', divT, { uVel: vel.a, texel: vt });
+      run('scale', pres.b, { uT: pres.a, k: .8, texel: vt }); pres.flip();
+      for (let k = 0; k < 20; k++) { run('press', pres.b, { uP: pres.a, uDiv: divT, texel: vt }); pres.flip(); }
+      run('grad', vel.b, { uP: pres.a, uVel: vel.a, texel: vt }); vel.flip();
+      run('advect', vel.b, { uVel: vel.a, uSrc: vel.a, velTexel: vt, dt, diss: .3, texel: vt }); vel.flip();
+      run('advect', dye.b, { uVel: vel.a, uSrc: dye.a, velTexel: vt, dt, diss: CFG.diss, texel: dye.a.texel }); dye.flip();
+      // 画面变了才重新上传（老虎在走、标题在动时）
+      if (uploadedVer !== sceneVer) {
+        uploadedVer = sceneVer;
+        upload(sceneTex[0], film);
+        if (titleShown) { drawTitle(); upload(sceneTex[1], titleCanvas); upload(sceneTex[2], front); }
+      }
+      const { p, u } = prog.show;
+      gl.useProgram(p);
+      [dye.a.tex, vel.a.tex, ...sceneTex].forEach((tex, k) => { gl.activeTexture(gl.TEXTURE0 + k); gl.bindTexture(gl.TEXTURE_2D, tex); });
+      gl.uniform1i(u.uDye, 0); gl.uniform1i(u.uVel, 1); gl.uniform1i(u.uFilm, 2); gl.uniform1i(u.uTitle, 3); gl.uniform1i(u.uFront, 4);
+      gl.uniform2fv(u.dyeTexel, dye.a.texel); gl.uniform2fv(u.velTexel, vt);
+      gl.uniform1f(u.time, (now - t0) / 1000);
+      ['a0', 'a1', 'b0', 'b1', 'edge', 'refr', 'haze', 'blur', 'spec'].forEach(k => gl.uniform1f(u[k], CFG[k]));
+      gl.uniform1i(u.hasTitle, titleShown ? 1 : 0); gl.uniform1i(u.hasFront, titleShown ? 1 : 0);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.viewport(0, 0, cw, ch);
+      gl.clearColor(0, 0, 0, 0); gl.clear(gl.COLOR_BUFFER_BIT);
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    }
+    return { frame };
+  })();
+
   // 检查用：读状态
-  window.whiteTiger = { state: () => ({ mode: useImg ? 'img' : 'blob', w, t: timeAtW(w), frame: lastFrame / 2, introDone, settled, hold, zoom, tween: tween ? tween.stage : null, loadedFrames, masks: masks.filter(Boolean).length, decoded: [...decoded.values()].filter(Boolean).length, vw, vh, openIdx, busy }) };
+  window.whiteTiger = { state: () => ({ mode: useImg ? 'img' : 'blob', w, t: timeAtW(w), frame: lastFrame / 2, settled, hold, zoom, tween: tween ? tween.stage : null, loadedFrames, masks: masks.filter(Boolean).length, decoded: [...decoded.values()].filter(Boolean).length, vw, vh, openIdx, busy }) };
 
   layout();
-  if (deepWork >= 0) { introDone = true; w = stageW[CONTENTS_STAGE]; settled = CONTENTS_STAGE; openWork(deepWork, { instant: true, push: false }); }
+  if (deepWork >= 0) { w = stageW[CONTENTS_STAGE]; settled = CONTENTS_STAGE; openWork(deepWork, { instant: true, push: false }); }
   requestAnimationFrame(tick);
   loadAll();
   loadCovers();

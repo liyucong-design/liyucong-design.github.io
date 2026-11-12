@@ -19,16 +19,17 @@
     </section>
 
     <canvas id="front" aria-hidden="true"></canvas>
+    <canvas id="glass" aria-hidden="true"></canvas>
 
     <section class="intro" aria-label="2026 UI作品集">
-      <p class="sub"><span>2026</span> UI作品集</p>
+      <p class="sub"><span class="lat">2026 UI</span>作品集</p>
       <div class="motto" aria-label="复杂的事简单化，简单的事标准化，标准的事流程化，流程的事自动化">
         <p><span>复杂的事</span><b>简单化</b><span>简单的事</span><b>标准化</b></p>
         <p><span>标准的事</span><b>流程化</b><span>流程的事</span><b>自动化</b></p>
       </div>
     </section>
 
-    <button class="explore" aria-label="继续往下看"><span>EXPLORE</span><i aria-hidden="true"></i></button>
+    <button class="explore" aria-label="进入作品目录"><span class="rips" aria-hidden="true"><b></b><b></b><b></b></span><span>EXPLORE</span><i aria-hidden="true"><svg viewBox="0 0 12 22" preserveAspectRatio="none"><path vector-effect="non-scaling-stroke" d="M6 4v13M2.5 13.5 6 17l3.5-3.5"/></svg></i></button>
 
     <section class="contents" aria-labelledby="contentsTitle">
       <div class="contents-head">
@@ -51,8 +52,8 @@
         <div class="rule"><span>感谢观看，期待与你一起做出好产品。</span><span>UI / UX DESIGN</span></div>
       </div>
       <div class="end-main">
-        <a class="dl" href="portfolio/portfolio-2026.pdf" aria-label="下载完整作品集 PDF"><span class="dl-btn"><span>DOWNLOAD</span><i aria-hidden="true"></i></span></a>
-        <p class="dl-info">完整作品集 PDF · 32 页 · <span id="dlSize">14 MB</span><span class="dl-state" aria-live="polite"></span></p>
+        <a class="dl" href="portfolio/portfolio-2026.pdf" aria-label="下载完整作品集 PDF"><span class="dl-btn"><span>下载完整作品集</span><i aria-hidden="true"><svg viewBox="0 0 12 22" preserveAspectRatio="none"><path vector-effect="non-scaling-stroke" d="M6 4v13M2.5 13.5 6 17l3.5-3.5"/></svg></i></span></a>
+        <p class="dl-info">PDF · 32 页 · <span id="dlSize">14 MB</span><span class="dl-state" aria-live="polite"></span></p>
         <div class="end-contact" id="endContact" hidden></div>
         <button class="again" id="dlAgain">再看一遍 <span aria-hidden="true">↑</span></button>
       </div>
@@ -70,8 +71,8 @@
       <button class="brand" data-go="0" aria-label="回到首页"><svg viewBox="0 0 36 36" aria-hidden="true"><path d="M8 14C2 4 11 3 14 9c3-1 5-1 8 0 3-6 12-5 6 5 3 4 3 11-1 15-5 5-13 5-18 0-4-4-4-11-1-15Z"/><path d="m11 18 4 2m10-2-4 2m-6 6 3 2 3-2M18 9v5"/></svg><span>PORTFOLIO<small>UI / UX · 2026</small></span></button>
       <nav class="nav" aria-label="场景">
         <button data-go="0" data-nav="0">首页<span>01</span></button>
-        <button data-go="2" data-nav="2">目录<span>02</span></button>
-        <button data-go="3" data-nav="3">下载<span>03</span></button>
+        <button data-go="1" data-nav="1">目录<span>02</span></button>
+        <a id="navDl" href="portfolio/portfolio-2026.pdf" aria-label="下载 PDF 作品集">下载PDF作品集<span aria-hidden="true">↓</span></a>
       </nav>
     </header>
 
@@ -79,18 +80,10 @@
     <header class="r-bar" id="rBar">
       <p class="r-title"><b id="rNo">01</b><span id="rTitle"></span></p>
       <p class="r-count" aria-live="off"><span id="rAt">1</span> / <span id="rOf">1</span></p>
+      <span class="r-line" aria-hidden="true"><i id="rLine"></i></span>
     </header>
-    <div class="r-stage" id="rStage">
-      <div class="r-pages" id="rPages"><div class="r-end" id="rEnd"></div></div>
-    </div>
-    <div class="r-foot">
-      <div class="r-nav">
-        <button class="r-step" id="rPrev" aria-label="上一页"><i aria-hidden="true">↑</i></button>
-        <div class="r-rail" id="rRail" role="group" aria-label="跳到某一页"></div>
-        <button class="r-step" id="rNext" aria-label="下一页"><i aria-hidden="true">↓</i></button>
-      </div>
-      <p class="r-tip">滑动翻页，点页面放大</p>
-    </div>
+    <div class="r-pages" id="rPages"></div>
+    <div class="r-end" id="rEnd"></div>
   </div>
 
   <div class="zoomer" id="zoomer" role="dialog" aria-modal="true" aria-label="放大查看" hidden>
