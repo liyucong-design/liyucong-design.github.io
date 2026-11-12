@@ -54,6 +54,10 @@ a{color:inherit;text-decoration:none}
 .contents{position:absolute;inset:0;z-index:6;pointer-events:none}
 .contents.on{pointer-events:auto}
 .contents-head{position:absolute;left:5.2%;right:5.2%;top:13%;opacity:var(--contents-o);transform:translateY(var(--head-y))}
+/* 这组英文等老虎走出画面才出现：加上 in 后缓缓浮上来；往回播时很快收起 */
+.contents-head>*{opacity:0;transition:opacity .45s ease}
+.contents-head.in>*{opacity:1;transition:opacity .25s ease}
+.contents-head.wipe{-webkit-mask-image:linear-gradient(90deg,#000 calc(var(--hx,0px) - var(--hs,0px)),transparent var(--hx,0px));mask-image:linear-gradient(90deg,#000 calc(var(--hx,0px) - var(--hs,0px)),transparent var(--hx,0px))}
 .label{display:flex;justify-content:space-between;margin:0 0 1.4vw;font-size:10px;font-weight:500;letter-spacing:2px;color:#1f2a4d;text-shadow:var(--glow)}
 .contents h2,.end h2{margin:0;font-family:var(--serif);font-weight:400;font-size:15.2vw;line-height:.78;letter-spacing:-.055em;text-align:center;padding-right:.05em;background:linear-gradient(110deg,#0f1747 8%,#23336e 38%,#5d6f9c 55%,#1a1f52 76%,#7a1d63 98%);-webkit-background-clip:text;background-clip:text;color:transparent}
 .rule{display:flex;justify-content:space-between;margin-top:2.2%;padding-top:12px;border-top:1px solid #23305a55;font-size:11px;font-weight:500;letter-spacing:1.4px;color:#1f2a4d;text-shadow:var(--glow)}
@@ -67,6 +71,12 @@ a{color:inherit;text-decoration:none}
 .cards li.show{transform:none;transition:transform 1.1s cubic-bezier(.25,.6,.3,1)}
 .cards li.show .card{opacity:1;animation:cardIn .85s cubic-bezier(.3,.15,.45,1) var(--d,0ms) backwards}
 @keyframes cardIn{from{opacity:0}}
+/* 点 EXPLORE 后：卡片和上面的英文用同一条边缘，跟在老虎身后从左往右扫出来，不再各自上浮。遮罩加在 .card 自己身上（加在父级毛玻璃会失效），
+   四周多留 40px 让阴影不被裁掉；--cx 是边缘在画面里的位置、--cl 是这张卡片的左边、--cs 是边缘渐隐的宽度 */
+.cards.sweep .card{--m:linear-gradient(90deg,#000 calc(var(--cx,0px) - var(--cl,0px) + 40px - var(--cs,0px)),transparent calc(var(--cx,0px) - var(--cl,0px) + 40px));-webkit-mask:var(--m) -40px -40px/calc(100% + 80px) calc(100% + 80px) no-repeat;mask:var(--m) -40px -40px/calc(100% + 80px) calc(100% + 80px) no-repeat;-webkit-mask-clip:no-clip;mask-clip:no-clip}
+.cards li.wiped{transition:none}
+.cards li.wiped .card{animation:none}
+.cards li:not(.show) .card{pointer-events:none}   /* 还没露出来的卡片点不到 */
 .card{height:clamp(200px,34vh,340px);display:flex;flex-direction:column;padding:17px 19px 15px;border-radius:20px;background:linear-gradient(142deg,#ffffffe8,#f6f9ffb0);border:1px solid #fff;box-shadow:0 14px 36px -16px #3a4a6e55,0 1px 0 #ffffffd4 inset;backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);position:relative;overflow:hidden;isolation:isolate;transition:background .3s,box-shadow .3s,transform .3s,opacity .3s}
 .card:hover,.card:focus-visible{background:#fff;box-shadow:0 20px 40px -12px #3a4a6e5a;transform:translateY(-4px)}
 .top,.bottom{display:flex;justify-content:space-between;align-items:center;font-size:7px;letter-spacing:.8px;color:#5f6a86;transition:color .25s,border-color .25s}
@@ -102,12 +112,22 @@ a{color:inherit;text-decoration:none}
 .hint>.af{margin-left:8px;font-size:13px}
 
 
-.loader{position:fixed;inset:0;z-index:50;display:flex;flex-direction:column;align-items:center;justify-content:center;background:#e7edf6;transition:opacity .6s,visibility .6s}
+.loader{position:fixed;inset:0;z-index:50;display:flex;flex-direction:column;align-items:center;justify-content:center;background:#e7edf6;transition:opacity .6s,visibility .6s,background-color .8s}
 .loader span{font-family:var(--serif);font-size:clamp(40px,7vw,110px);letter-spacing:-.05em}
 .loader p{font-family:var(--song);font-size:13px;letter-spacing:3px;color:#5d6a85}
 .loader b{display:block;width:120px;height:1px;margin-top:22px;background:#9aa7b83d}
 .loader b i{display:block;height:100%;width:0;background:#55637e;transition:width .2s}
 .ready .loader{opacity:0;visibility:hidden}
+/* 第一帧到了就先露出页面：遮罩变透明，只在底部留一条加载进度（原来底栏进度线的位置），够播了再让老虎走过来 */
+.loader span,.loader p{transition:opacity .5s}
+.peek .loader{background-color:transparent}
+.peek .loader span,.peek .loader p{opacity:0}
+.peek .loader b{position:absolute;left:50%;bottom:3.4%;margin:0 0 4px -60px;background:#1f2a4d40;box-shadow:0 0 8px #ffffffb0;animation:peekBar 1s both}
+.peek .loader b:before{content:"LOADING";position:absolute;left:-40px;right:-40px;bottom:12px;text-align:center;font-size:9px;font-weight:500;letter-spacing:3px;text-indent:3px;color:#1f2a4d;text-shadow:var(--glow)}
+.peek .loader b i{background:#1f2a4d}
+@keyframes peekBar{0%,40%{opacity:0}to{opacity:1}}
+.footer{transition:opacity .5s}
+.peek:not(.ready) .footer{opacity:0}
 
 /* 手机竖屏：画面裁成中间一条，标题缩到老虎头部一行，文案放到下方 */
 @media (max-aspect-ratio:4/5){
@@ -143,6 +163,19 @@ a{color:inherit;text-decoration:none}
 .end-head{position:absolute;left:5.2%;right:5.2%;top:13%;transform:translateY(var(--end-y))}
 .end h2{font-family:var(--serif);font-weight:400;font-size:13.4vw;line-height:.78;letter-spacing:-.05em;text-align:center;white-space:nowrap;padding-right:.05em;background:linear-gradient(110deg,#0f1747 8%,#23336e 38%,#5d6f9c 55%,#1a1f52 76%,#7a1d63 98%);-webkit-background-clip:text;background-clip:text;color:transparent}
 .end-main{position:absolute;left:0;right:0;bottom:9.5%;display:flex;flex-direction:column;align-items:center;transform:translateY(calc(var(--end-y) * .6));text-align:center}
+/* 结尾页中间：四个作品的封面小图，夹在标题和下载按钮之间，大小跟着这块空当走；空当太矮（横着的手机）就不显示 */
+.end-works{position:absolute;left:10%;right:10%;top:calc(13% + 10.5vw + 102px);bottom:calc(9.5% + 178px);container-type:size;display:flex;align-items:center;justify-content:center;transform:translateY(calc(var(--end-y) * .8))}
+.end-works ol{margin:0;padding:0;list-style:none;display:flex;justify-content:center;gap:16px}
+.end-works li{width:18vw;width:min(23.6cqw,calc((100cqh - 36px) * 1.7778))}
+.end-works a{display:block;text-decoration:none;color:#1f2a4d;border-radius:14px;transition:opacity .3s}
+.end-works .thumb{display:block;aspect-ratio:16/9;border-radius:14px;overflow:hidden;background:#121a2e;box-shadow:0 0 0 1px #ffffffd9,0 16px 32px -16px #2a3a5e80;transition:transform .5s cubic-bezier(.16,1,.3,1),box-shadow .3s}
+.end-works canvas{display:block;width:100%;height:100%}
+.end-works .cap{display:flex;align-items:baseline;gap:8px;margin-top:11px;padding:0 2px;font-size:12px;font-weight:500;letter-spacing:.4px;white-space:nowrap;text-shadow:var(--glow)}
+.end-works .cap b{font-family:var(--serif);font-weight:400;font-size:15px;letter-spacing:0}
+.end-works .cap i{margin-left:auto;font-style:normal;font-size:11px;opacity:.55;transition:opacity .25s,transform .35s cubic-bezier(.16,1,.3,1)}
+.end-works a:focus-visible{outline:2px solid var(--ink);outline-offset:4px}
+@container (max-height:104px){.end-works ol{display:none}}
+@container (max-width:520px){.end-works .cap i{display:none}}
 .dl{display:inline-block;border-radius:999px;outline-offset:6px;text-decoration:none}
 .dl-btn{position:relative;height:60px;padding:0 34px;border-radius:999px;background:#ffffffe6;box-shadow:0 0 0 1px #ffffff80,0 12px 34px #1d26442e;display:flex;flex-direction:row;align-items:center;justify-content:center;gap:14px;color:var(--ink);transition:background .25s,transform .3s cubic-bezier(.16,1,.3,1)}
 .dl:hover .dl-btn,.dl:focus-visible .dl-btn{background:#fff;transform:scale(1.04)}
@@ -158,6 +191,18 @@ a{color:inherit;text-decoration:none}
   .end-head{left:7%;right:7%;top:14%}
   .end h2{font-size:14.2vw}
   .end-main{bottom:16%}
+  .end-works{left:7%;right:7%;top:calc(14% + 11.1vw + 88px);bottom:calc(16% + 166px)}
+  .end-works ol{display:grid;grid-template-columns:repeat(2,auto);gap:14px 10px}
+  .end-works li{width:40vw;width:min(48.4cqw,calc((50cqh - 39px) * 1.7778))}
+  .end-works .thumb{border-radius:10px}
+  .end-works .cap{margin-top:8px;font-size:11px}
+  .end-works .cap b{font-size:13px}
+  .end-works .cap i{display:inline}
+  /* 手机带着浏览器上下栏时这块空当矮，小图下面的字排不开：收起字、把小图放大（封面上本来就写着作品名，读屏仍能读到） */
+  @container (max-height:204px){
+    .end-works li{width:min(48.4cqw,calc((50cqh - 7px) * 1.7778))}
+    .end-works .cap{position:absolute;width:1px;height:1px;margin:0;padding:0;overflow:hidden;clip-path:inset(50%)}
+  }
   .dl-btn{height:54px;padding:0 28px}
   .dl-btn>span{font-size:15px}
   .dl-info{margin-top:18px;font-size:12px}
@@ -168,6 +213,9 @@ a{color:inherit;text-decoration:none}
 .cover canvas{display:block;width:100%;height:100%;object-fit:cover}
 .cover:after{content:"";position:absolute;inset:0;background:linear-gradient(180deg,#0a102852 0%,#0a102808 36%,#0a1028d9 100%)}
 @media (hover:hover){
+  .end-works a:hover .thumb{transform:translateY(-4px);box-shadow:0 0 0 1px #fff,0 22px 36px -14px #2a3a5e8c}
+  .end-works a:hover .cap i{opacity:1;transform:translate(2px,-2px)}
+  .end-works ol:has(a:hover) a:not(:hover){opacity:.62}
   .card:hover .cover,.card:focus-visible .cover{opacity:1;transform:none}
   .card:hover em,.card:focus-visible em{opacity:0}
   .card:hover .top,.card:hover .bottom,.card:focus-visible .top,.card:focus-visible .bottom,.card:hover strong,.card:focus-visible strong{color:#fff}
@@ -263,3 +311,4 @@ body:has(.reader.show) .nav button[aria-current="true"]:after{background:#fff;bo
 .cur-dot{width:14px;height:14px;margin:-7px 0 0 -7px;background:radial-gradient(circle,#fff 0 35%,#e8f1ff 55%,#ffd99a00 100%);box-shadow:0 0 14px 4px #fff7e0b3}
 .cur-ring{width:38px;height:38px;margin:-19px 0 0 -19px;border:1px solid #ffffffd9;box-shadow:0 0 0 .5px #1a2a5c1f}
 body.cur-on .cur-dot,body.cur-on .cur-ring{opacity:1}
+@media (prefers-reduced-motion:reduce){.contents-head>*{transition:none!important}}

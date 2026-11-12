@@ -30,17 +30,24 @@
   const FAST_MS = 1000;                    // 快进时剩下的动作最多播多久
   // 四张卡片紧跟在老虎身后连着出现（实际间隔约 0.4 秒）。老虎从左往右走出去，四个位置约在 12.1 / 12.6 / 13.0 / 13.4 秒让开，
   // 再早会压在老虎脚上
-  const CARD_T = [12.35, 12.7, 13.05, 13.4];
   const CARD_GAP = 130;                    // 快进或从结尾页回来时几张会同时到点：按这个间隔（毫秒）排队，不一起蹦出来
-  const READY_FRAME = 160;                 // 走近到凝视的帧加载完就进入页面，其余在后台继续
+  const READY_FRAME = Math.ceil(INTRO_T * FPS);   // 开场走到近景用到的最后一帧（154）。网速够时不必等它们全到，见 introNeed
+  // CONTENTS 这组英文跟在老虎身后从左往右扫出来。TAIL：从 TAIL_T0 秒起每 1/6 秒，老虎身后边缘（标题这一带高度内）在画面里的横向位置，
+  // 占画面宽度的比例，逐帧量出来的；14.2 秒以后老虎已走出画面，按原速外推，让扫出的边缘继续走完
+  const TAIL_T0 = 10.5;
+  const TAIL = [0, 0, .03, .07, .12, .18, .22, .26, .29, .34, .39, .42, .46, .5, .58, .65, .71, .76, .81, .85, .89, .95, 1, 1.06, 1.12, 1.18, 1.24];
+  const HEAD_GAP = .01, HEAD_SOFT = .06;   // 扫出的边缘离老虎留多远、边缘渐隐多宽（都是画面宽度的比例）
+  // REAR：同样的时间点上，整只老虎连尾巴在内最靠后的位置（尾巴尖），也是逐帧量的。卡片在画面下半，尾巴会扫到那一带（竖屏尤其），所以卡片按它走，比英文稍晚一点
+  const REAR = [0, 0, 0, .04, .09, .115, .155, .215, .255, .305, .355, .39, .43, .475, .525, .585, .635, .67, .71, .76, .81, .86, .89, .93, .985, 1.04, 1.1, 1.16];
 
   const film = document.getElementById('film'), fctx = film.getContext('2d');
   const front = document.getElementById('front'), tctx = front.getContext('2d');
   const root = document.documentElement;
   const navButtons = [...document.querySelectorAll('[data-nav]')];
   const explore = document.querySelector('.explore'), contents = document.querySelector('.contents'), endEl = document.querySelector('.end');
-  const cardItems = [...document.querySelectorAll('.cards li')], cardOn = cardItems.map(() => false);
-  let cardFree = 0;
+  const cardsEl = document.querySelector('.cards'), cardItems = [...cardsEl.querySelectorAll('li')], cardOn = cardItems.map(() => false);
+  const CARD_BLEED = 40;                  // 卡片的遮罩四周多留的一圈（像素），阴影在里面，不被裁掉；和 style.css 里 .cards.sweep .card 的 40px 是同一个数
+  let cardFree = 0, cardVw = 0, cardVh = 0, cardL = [], cardsR = 0, cardsFull = null;
   const reduced = matchMedia('(prefers-reduced-motion: reduce)');
   // 箭头流动：把箭头换成同一格里叠着的两支，鼠标移上去（或键盘聚焦）时整组顺着箭头方向移动一格；播完才接受下一次
   const AF_DIR = { '↗': [1, -1], '→': [1, 0], '↓': [0, 1], '↑': [0, -1] };
@@ -103,27 +110,61 @@
     img.onerror = retry;
     img.src = src;
   });
+  // 每一帧 / 每张抠像是否已有结果（读到了，或重试后放弃），buf 为从第 0 帧起连续到齐的帧数
+  const gotF = new Uint8Array(LAST_FRAME + 1), gotM = new Uint8Array((MASK_LAST >> 1) + 1);
+  const frameIn = f => gotF[f] && (f > MASK_LAST || gotM[f >> 1]);
+  let buf = 0, loadT0 = 0, loadDone = false, peeked = false, barMax = 0;
+  const rateLog = [];
   async function loadAll() {
-    const jobs = [];
+    const jobs = [], mids = [];
+    // 新到的帧就在当前画面附近：马上排上解码，不用等画面动起来
+    const here = () => lastFrame >= 0 ? lastFrame : deepWork >= 0 ? LAST_SLOT : 0;
+    const near = s => { const c = here(); if (s >= c - 20 && s <= c + 100) keepDecoded(c, dir); };
     for (let i = 0; i <= LAST_FRAME; i++) {
-      jobs.push(() => loadImage(`frames/${pad(i, 4)}.webp`, frames, i * 2).then(() => { loadedFrames++; progressLoad(); }));
+      jobs.push(() => loadImage(`frames/${pad(i, 4)}.webp`, frames, i * 2).then(() => { gotF[i] = 1; loadedFrames++; near(i * 2); progressLoad(); }));
       if (i >= MID_FROM && i < LAST_FRAME && (i - MID_FROM) % MID_PER === 0) {
         const g = (i - MID_FROM) / MID_PER;
-        jobs.push(() => loadImage(`frames/mid${pad(g, 2)}.webp`, midSheets, g));
+        mids.push(() => loadImage(`frames/mid${pad(g, 2)}.webp`, midSheets, g).then(() => near(i * 2 + MID_PER)));
       }
-      if (i % 2 === 0 && i <= MASK_LAST) jobs.push(() => loadImage(`masks/${pad(i / 2, 3)}.webp`, masks, i / 2));
+      if (i % 2 === 0 && i <= MASK_LAST) jobs.push(() => loadImage(`masks/${pad(i / 2, 3)}.webp`, masks, i / 2).then(() => { gotM[i / 2] = 1; near(i * 2); progressLoad(); }));
     }
+    // 原帧和抠像按时间顺序在前，补的中间帧放最后（缺了也能播，只是那一段少一半帧）。
+    // 从作品链接直接打开：倒过来，先加载目录那一帧
+    const order = deepWork >= 0 ? [...jobs.reverse(), ...mids.reverse()] : [...jobs, ...mids];
     let next = 0;
-    const worker = async () => { while (next < jobs.length) await jobs[next++](); };
-    if (deepWork >= 0) jobs.reverse();   // 从作品链接直接打开：先加载目录那一帧
-    await Promise.all(Array.from({ length: 6 }, worker));
+    const worker = async () => { while (next < order.length) await order[next++](); };
+    loadT0 = performance.now();
+    await Promise.all(Array.from({ length: 8 }, worker));
     progressLoad(true);
   }
+  // 开场不必等所有帧到齐：按现在的下载速度 r（帧/秒），缓冲到第几帧就可以开播，后面的帧边播边到、不会被追上。
+  // 播到第 k 帧的时刻不早于 INTRO_DELAY + wallAt(k/FPS)·(1-a)（a 为缓起占比）；到达时间留 1.3 倍余量
+  function introNeed(r) {
+    const a = Math.min(0.12, 600 / (W0 * 1000));
+    let need = Math.min(24, READY_FRAME + 1);
+    for (let k = need; k <= READY_FRAME; k++) need = Math.max(need, Math.ceil(k + 1 - (INTRO_DELAY / 1000 + wallAt(k / FPS) * (1 - a)) * r / 1.3));
+    return Math.min(need, READY_FRAME + 1);
+  }
   function progressLoad(all) {
-    let ahead = 0;
-    for (let i = 0; i <= READY_FRAME; i++) if (frames[i * 2]) ahead++;
-    document.getElementById('loaderBar').style.width = `${Math.round(ahead / (READY_FRAME + 1) * 100)}%`;
-    if (!started && (all || ahead > READY_FRAME || (deepWork >= 0 && frames[LAST_SLOT]))) {
+    while (buf <= LAST_FRAME && frameIn(buf)) buf++;
+    if (all) loadDone = true;
+    if (started) return;
+    const plain = deepWork < 0 && !reduced.matches;   // 正常打开：老虎从远处走过来
+    let need = READY_FRAME + 1;
+    if (plain) {
+      const now = performance.now();
+      rateLog.push([now, buf]);
+      while (rateLog.length > 1 && now - rateLog[1][0] > 4000) rateLog.shift();
+      const overall = buf / Math.max(.2, (now - loadT0) / 1000), [t0, b0] = rateLog[0];
+      const recent = now - t0 > 1500 ? (buf - b0) / ((now - t0) / 1000) : overall;
+      need = introNeed(Math.min(overall, recent));
+    }
+    barMax = Math.max(barMax, Math.min(1, buf / need));
+    document.getElementById('loaderBar').style.width = `${Math.round(barMax * 100)}%`;
+    // 第一帧已经能画：先把页面露出来（老虎在远处等着），加载条挪到底部，够播了再走
+    const has = (key, raw) => decoded.get(key) || isImg(raw);
+    if (plain && !peeked && has('f0', frames[0]) && has('m0', masks[0])) { peeked = true; document.body.classList.add('peek'); dirty = true; }
+    if (all || (deepWork >= 0 ? gotF[LAST_FRAME] : buf >= need)) {
       started = true; document.body.classList.add('ready'); dirty = true;
       keepDecoded(deepWork >= 0 ? LAST_SLOT : Math.max(0, lastFrame), dir);   // 进入页面前先把走近的帧解码好，第一次滑动就不卡
       if (deepWork < 0) {
@@ -131,9 +172,13 @@
         else { const now = performance.now(); tween = { from: w, to: 0, stage: 0, start: now + INTRO_DELAY, dur: W0 * 1000 }; tweenLast = now; }
       }
     }
-    // 从作品链接直接打开时，先把目录那一帧解码好，关闭阅读页时背景才有画面
-    if (deepWork >= 0) { if (loadedFrames <= 48) { keepDecoded(LAST_SLOT, 1); dirty = true; } }
-    else if (loadedFrames === 1) { keepDecoded(0, 1); dirty = true; }
+  }
+  // 网络慢、接下来几帧还没到：播放原地等一等，不跳帧；文字和卡片跟着等，不会抢在画面前面
+  function starved() {
+    if (loadDone) return false;
+    const f = frameAt(timeAtW(w)) >> 1;
+    for (let k = 0; k <= 2; k++) { const j = f + k * dir; if (j >= 0 && j <= LAST_FRAME && !frameIn(j)) return true; }
+    return false;
   }
 
   // ---------- 预解码：当前位置前后一段帧提前解码成位图，播放时不再临时解码，走路才不会一顿一顿 ----------
@@ -243,7 +288,12 @@
   }
 
   // 文字跟着镜头：标题在老虎走近时向两边分开、放大，俯拍时目录从上下浮现
-  let lastScene = '';
+  let lastScene = '', headShown = false, headFull = null, headVw = 0, headL = 0, headW = 0;
+  const contentsHead = document.querySelector('.contents-head');
+  function tailAt(t, tab = TAIL) {
+    const k = clamp((t - TAIL_T0) * 6, 0, tab.length - 1), i = Math.min(k | 0, tab.length - 2);
+    return tab[i] + (tab[i + 1] - tab[i]) * (k - i);
+  }
   function updateText(t) {
     const css = (k, v) => root.style.setProperty(k, v);
     const u = smoothstep(2.4, 6.2, t);
@@ -260,20 +310,41 @@
     const leaving = !!tween && tween.stage !== 0 && tween.to > w;
     explore.classList.toggle('pulse', ex > .6 && !leaving);
     explore.classList.toggle('go', leaving && ex > .02);
-    const co = smoothstep(10.6, 12.4, t);   // CONTENTS 和目录随着老虎走出画面一起出现
+    const co = smoothstep(10.6, 12.4, t);   // 目录从这时起可以点；卡片跟在老虎身后从左往右扫出来（见下面）
     // 结尾：e 为 0–1，目录淡出、卡片沉下，THANK YOU 和下载浮现
     const e = clamp((w - stageW[CONTENTS_STAGE]) / END_W, 0, 1);
-    const coEnd = co * (1 - smoothstep(0, .55, e));
-    css('--contents-o', coEnd.toFixed(3));
-    css('--head-y', `${((1 - co) * 30 - e * 26).toFixed(1)}px`);
+    // CONTENTS 这组英文：老虎往右走，字跟在它身后从左往右扫出来（遮罩的边缘按 TAIL 走，始终落在老虎后面）；往回播时一动就先收起
+    const headOn = t > (dir < 0 ? DURATION - .1 : TAIL_T0);
+    if (headOn !== headShown) { headShown = headOn; contentsHead.classList.toggle('in', headOn); }
+    if (headVw !== vw) { headVw = vw; headL = contentsHead.offsetLeft; headW = contentsHead.offsetWidth; }
+    const frameW = SRC_W * scale, headX = ox + (tailAt(t) - HEAD_GAP) * frameW - headL, headSoft = HEAD_SOFT * frameW;
+    const full = headX - headSoft >= headW;
+    if (full !== headFull) { headFull = full; contentsHead.classList.toggle('wipe', !full); }
+    if (!full) { css('--hx', `${headX.toFixed(1)}px`); css('--hs', `${headSoft.toFixed(1)}px`); }
+    css('--contents-o', (1 - smoothstep(0, .55, e)).toFixed(3));
+    css('--head-y', `${(-e * 26).toFixed(1)}px`);
     contents.classList.toggle('on', co > .6 && e < .5);
     const nowMs = performance.now();
+    // 卡片和上面的英文一样跟在老虎身后扫出来：尾巴尖走到哪，卡片就从左往右露到哪（遮罩加在每张卡片自己身上，位置按各自的左边换算）
+    if (cardVw !== vw || cardVh !== vh) {
+      cardVw = vw; cardVh = vh;
+      const base = cardsEl.offsetLeft;
+      cardL = cardItems.map(li => base + li.offsetLeft);
+      cardItems.forEach((li, k) => li.style.setProperty('--cl', `${cardL[k]}px`));
+      cardsR = base + cardsEl.offsetWidth;
+    }
+    const edge = ox + (tailAt(t, REAR) - HEAD_GAP) * frameW;
+    const swept = edge - headSoft >= cardsR + CARD_BLEED;   // 边缘已经扫过最右一张：撤掉遮罩
+    if (swept !== cardsFull) { cardsFull = swept; cardsEl.classList.toggle('sweep', !swept); }
+    if (!swept) { cardsEl.style.setProperty('--cx', `${edge.toFixed(1)}px`); cardsEl.style.setProperty('--cs', `${headSoft.toFixed(1)}px`); }
     cardItems.forEach((li, k) => {
-      const on = t > CARD_T[k] && e < .22;
+      const on = edge > cardL[k] - CARD_BLEED && e < .22;
       if (on === cardOn[k]) return;
       cardOn[k] = on;
-      const wait = on ? Math.max(0, cardFree - nowMs) : 0;   // 收起时不排队，一起走
-      if (on) cardFree = nowMs + wait + CARD_GAP;
+      // 扫出来的不上浮、不排队（wiped）；从结尾页回来时边缘早已扫完，仍按原来的方式一张张浮上来。收起时不排队，一起走
+      const wiped = on && !swept, wait = on && !wiped ? Math.max(0, cardFree - nowMs) : 0;
+      if (on && !wiped) cardFree = nowMs + wait + CARD_GAP;
+      li.classList.toggle('wiped', wiped);
       li.style.transitionDelay = wait ? `${Math.round(wait)}ms` : '';
       li.style.setProperty('--d', `${Math.round(wait)}ms`);   // 卡片的淡入动画用同一个延迟
       li.classList.toggle('show', on);
@@ -333,6 +404,7 @@
   let settled = 0, tween = null, dragging = false, wVel = 0, tweenLast = 0;
   // fast：快进（播放中同方向再滑一次、点顶部导航），剩下的动作约 1 秒播完，画面仍是连续的
   function goTo(i, fast) {
+    if (!started && deepWork < 0) return;   // 开场还在等加载：先不响应
     i = clamp(i, 0, LAST);
     const to = stageW[i];
     if (tween && tween.stage === i && (!fast || tween.fast)) return;
@@ -353,6 +425,13 @@
     keepDecoded(Math.max(0, lastFrame), dir);   // 方向一变，立刻把前方的帧排上解码
   }
   function stepTween(now) {
+    if (!tween.fast && now > tween.start && starved()) {
+      if (tween.seen !== loadedFrames) { tween.seen = loadedFrames; tween.waited = 0; }
+      const d = now - tweenLast;
+      tweenLast = now; wVel = 0;
+      // 一直没有新的帧进来（超过 20 秒）就不再等，照旧往下播
+      if ((tween.waited += Math.min(d, 100)) < 20000) { tween.start += d; return; }
+    }
     const t = clamp((now - tween.start) / tween.dur, 0, 1);
     let e;
     if (tween.fast) {
@@ -478,6 +557,12 @@
   const reader = $('reader'), rPages = $('rPages'), rEnd = $('rEnd');
   const zoomer = $('zoomer'), zScroll = $('zScroll'), zImg = $('zImg');
   const cards = [...document.querySelectorAll('[data-work]')];
+  const endThumbs = [...document.querySelectorAll('[data-end-work]')];   // 结尾页的四张作品小图，点开和目录卡片一样
+  // 作品从哪里放大出来、关掉时缩回哪里：停在结尾页（且小图排得下）时是结尾页的小图，否则是目录卡片
+  const originOf = i => {
+    const a = endEl.classList.contains('on') ? endThumbs[i] : null;
+    return a && a.offsetWidth ? { el: a.querySelector('.thumb'), radius: 14, focus: a } : { el: cards[i], radius: 20, focus: cards[i] };
+  };
   const narrow = matchMedia('(max-aspect-ratio:4/5)');
   const sleep = ms => new Promise(r => setTimeout(r, ms));
   const sheetOf = (i, p) => `works/wk-${i + 1}-${p >> 1}.webp`;
@@ -514,6 +599,13 @@
       s.className = 'cover';
       s.append(coverCanvas(i));
       card.prepend(s);
+    });
+    endThumbs.forEach((a, i) => {
+      const c = document.createElement('canvas'), g = c.getContext('2d');
+      c.width = 640; c.height = 360;
+      g.imageSmoothingQuality = 'high';
+      g.drawImage(img, 0, i * COVER_H, COVER_W, COVER_H, 0, 0, 640, 360);
+      a.querySelector('.thumb').append(c);
     });
     if (openIdx >= 0) fillEnd(openIdx);
   }
@@ -593,7 +685,8 @@
     if (busy || openIdx >= 0) return;
     busy = true;
     openIdx = i;
-    returnFocus = cards[i];
+    const origin = originOf(i);
+    returnFocus = origin.focus;
     document.body.classList.add('reading');
     buildPages(i);
     reader.hidden = false;
@@ -601,11 +694,11 @@
     syncProgress();
     if (push) pushHash(i);
     const motion = !instant && !reduced.matches && coversImg;
-    const card = cards[i];
+    const card = origin.el;
     const target = currentPageEl();
     if (motion) {
       card.style.visibility = 'hidden';
-      const f = flight(i, rectOf(card, 20), rectOf(target, pageRadius(target)));
+      const f = flight(i, rectOf(card, origin.radius), rectOf(target, pageRadius(target)));
       requestAnimationFrame(() => reader.classList.add('show'));
       await f.done;
       card.style.visibility = '';   // 阅读页已经盖住目录，这里就还原，否则切到下一个作品再返回时这张卡片会一直不见
@@ -626,10 +719,10 @@
     if (i < 0 || busy) return;
     busy = true;
     savedTop[i] = reader.scrollTop + reader.clientHeight / 2 < rEnd.offsetTop ? reader.scrollTop : 0;   // 看完了下次从头开始
-    const card = cards[i];
+    const origin = originOf(i), card = origin.el;
     if (!reduced.matches && coversImg) {
       const page = currentPageEl();
-      const f = flight(i, rectOf(page, pageRadius(page)), rectOf(card, 20));
+      const f = flight(i, rectOf(page, pageRadius(page)), rectOf(card, origin.radius));
       card.style.visibility = 'hidden';
       reader.classList.remove('pages-in');
       reader.classList.remove('show');
@@ -667,7 +760,7 @@
     reader.classList.remove('pages-in');
     await sleep(reduced.matches ? 0 : 240);
     openIdx = i;
-    returnFocus = cards[i];
+    returnFocus = originOf(i).focus;
     buildPages(i);
     reader.scrollTop = 0;
     syncProgress();
@@ -685,7 +778,7 @@
     else if (i >= 0 && i !== openIdx) switchWork(i);
   });
 
-  cards.forEach((card, i) => {
+  [cards, endThumbs].forEach(list => list.forEach((card, i) => {
     card.addEventListener('click', e => {
       if (e.metaKey || e.ctrlKey || e.shiftKey) return;   // 新标签打开时走浏览器默认
       e.preventDefault();
@@ -695,7 +788,7 @@
     const warm = () => { if (!card.dataset.warm) { card.dataset.warm = 1; new Image().src = sheetOf(i, 0); } };
     card.addEventListener('pointerenter', warm);
     card.addEventListener('focus', warm);
-  });
+  }));
 
   // 竖屏手机：横版页面字小，点一下铺满屏幕高度，左右滑动细看
   let zoomFrom = null;
@@ -1034,7 +1127,7 @@
   })();
 
   // 检查用：读状态
-  window.whiteTiger = { state: () => ({ mode: useImg ? 'img' : 'blob', w, t: timeAtW(w), frame: lastFrame / 2, settled, hold, zoom, tween: tween ? tween.stage : null, loadedFrames, masks: masks.filter(Boolean).length, decoded: [...decoded.values()].filter(Boolean).length, vw, vh, openIdx, busy }) };
+  window.whiteTiger = { state: () => ({ mode: useImg ? 'img' : 'blob', w, t: timeAtW(w), frame: lastFrame / 2, settled, hold, zoom, tween: tween ? tween.stage : null, waited: tween ? tween.waited || 0 : 0, loadedFrames, buf, started, peeked, loadDone, headShown, masks: masks.filter(Boolean).length, decoded: [...decoded.values()].filter(Boolean).length, vw, vh, openIdx, busy }) };
 
   layout();
   if (deepWork >= 0) { w = stageW[CONTENTS_STAGE]; settled = CONTENTS_STAGE; openWork(deepWork, { instant: true, push: false }); }
