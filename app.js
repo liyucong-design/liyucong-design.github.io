@@ -19,6 +19,19 @@
   const END_W = 0.9;                       // 目录到结尾的切换时长（秒），这段画面不动，只换文字
   // 姓名和联系方式：填上就会显示在结尾页，点击可复制；留空则不显示
   const CONTACT = { name: '', email: '', wechat: '' };
+  // 访问量和下载量：两个计数器（Abacus 免费计数服务，不用注册、不用 Cookie、不加载任何统计脚本），每次只发一个很小的请求。
+  // 访问：同一个浏览器窗口里刷新、来回切换只算一次；下载：每点一次"下载"算一次（顶部导航、结束页、阅读页底部三处）。
+  // 本机打开、私有预览、自动化浏览器都不计数。查看数字：打开网站的 stats.html（那里的地址要和这里一致）。留空则关闭统计
+  const STATS = 'https://abacus.jasoncameron.dev/hit/liyucong-design/';
+  function stat(key) {
+    if (!STATS || location.protocol === 'file:' || /^(localhost|127\.|\[::1\]|0\.0\.0\.0)/.test(location.hostname) || navigator.webdriver || window.claude) return;
+    try { fetch(STATS + key, { mode: 'cors', keepalive: true, cache: 'no-store' }).catch(() => {}); } catch {}
+  }
+  function statVisit() {
+    let seen = false;
+    try { seen = sessionStorage.getItem('wt-visit') === '1'; sessionStorage.setItem('wt-visit', '1'); } catch {}
+    if (!seen) stat('visits');
+  }
   // 播放速度（相对原速）。点击后为了让目录早点出来：凝视段几乎不动，2 倍速带过；闭眼转身段 1.5 倍，
   // 到镜头快速拉高之前回落到 1.1 倍（那一下本来就快，不能再加）；走出画面段 0.9 倍（放慢过头用户嫌拖，原速又嫌快）
   const rate = t => lerp(1.1, 0.9, smoothstep(9.8, 10.8, t)) * (1 + smoothstep(6.4, 6.7, t) * lerp(1, 0.36, smoothstep(7.2, 7.6, t)) * (1 - smoothstep(8.6, 9.5, t)));
@@ -166,6 +179,7 @@
     if (plain && !peeked && has('f0', frames[0]) && has('m0', masks[0])) { peeked = true; document.body.classList.add('peek'); dirty = true; }
     if (all || (deepWork >= 0 ? gotF[LAST_FRAME] : buf >= need)) {
       started = true; document.body.classList.add('ready'); dirty = true;
+      statVisit();
       keepDecoded(deepWork >= 0 ? LAST_SLOT : Math.max(0, lastFrame), dir);   // 进入页面前先把走近的帧解码好，第一次滑动就不卡
       if (deepWork < 0) {
         if (reduced.matches) w = 0;
@@ -821,6 +835,7 @@
   function bindDownload(link, show) {
     link.setAttribute('download', PDF_NAME);
     link.addEventListener('click', async e => {
+      stat('downloads');
       if (!window.claude || !window.claude.use) { show('ok'); return; }
       e.preventDefault();
       try {
